@@ -287,13 +287,27 @@
    * 3. COMBAT — damage math shared by all actors
    * ========================================================== */
   const Combat = (function () {
-    /** Roll damage from `attacker` against `defender`. */
-    function rollDamage(attacker, defender) {
+    /**
+     * Roll damage from `attacker` against `defender`.
+     * `options` (all optional): power, multiplier, critChance, critMultiplier,
+     * alwaysCrit, ignoreDefense, bonusPct, statKey.
+     */
+    function rollDamage(attacker, defender, options) {
+      const opts = options || {};
+      const statPower = opts.power !== undefined ? opts.power
+        : (opts.statKey ? (attacker[opts.statKey] || 0) : attacker.attack);
+      const power = statPower * (opts.multiplier || 1);
       const variance = Utils.randRange(COMBAT.varianceMin, COMBAT.varianceMax);
-      const raw = attacker.attack * variance - defender.defense * 0.8;
-      let damage = Math.max(COMBAT.minDamage, Math.round(raw));
-      const crit = Utils.random() < COMBAT.critChance;
-      if (crit) damage = Math.round(damage * COMBAT.critMultiplier);
+      const defense = opts.ignoreDefense ? 0 : (defender.defense || 0) * COMBAT.defenseFactor;
+      let damage = Math.max(COMBAT.minDamage, Math.round(power * variance - defense));
+
+      const critChance = opts.critChance !== undefined ? opts.critChance
+        : (attacker.critChance !== undefined ? attacker.critChance : COMBAT.critChance);
+      const critMultiplier = opts.critMultiplier !== undefined ? opts.critMultiplier
+        : (attacker.critMultiplier || COMBAT.critMultiplier);
+      const crit = opts.alwaysCrit ? true : Utils.random() < critChance;
+      if (crit) damage = Math.round(damage * critMultiplier);
+      if (opts.bonusPct) damage = Math.round(damage * (1 + opts.bonusPct));
       return { damage: damage, crit: crit };
     }
 
@@ -303,42 +317,434 @@
       return gap <= range;
     }
 
-    return { rollDamage: rollDamage, inRange: inRange };
+    /** Damage after the defender's damage-reduction (passives, barriers, ...). */
+    function mitigate(defender, damage) {
+      const reduction = Utils.clamp(defender.damageReduction || 0, 0, 0.85);
+      return Math.max(COMBAT.minDamage, Math.round(damage * (1 - reduction)));
+    }
+
+    return { rollDamage: rollDamage, inRange: inRange, mitigate: mitigate };
+  })();
+
+  /* ============================================================
+   * 3b. STATUSES — burns, poison, slows, freezes and stuns on monsters
+   * ========================================================== */
+  const Statuses = (function () {
+    const DOT_TICK_SECONDS = 0.5;   // damage-over-time is applied in half-second ticks
+
+    function blank() {
+      return { burn: null, poison: null, slow: null, freezeMs: 0, stunMs: 0, pool: 0, poolTimer: 0 };
+    }
+
+    function ensure(monster) {
+      if (!monster.status) monster.status = blank();
+      return monster.status;
+    }
+
+    function dotPower(def, power) {
+      return status_power(power, def.dpsPct);
+    }
+
+    /** burn/poison damage per second derived from the caster's power. */
+    function status_power(power, pct) {
+      return Math.max(1, power * pct);
+    }
+
+    /**
+     * Apply a status payload ({ burn, poison, slow, freezeMs, stunMs }) to a monster.
+     * `casterMods` lets class passives (chillBonus, burnBonus) strengthen the effect.
+     */
+    function apply(monster, payload, source, casterMods) {
+      if (!monster || !payload) return [];
+      const status = ensure(monster);
+      const mods = casterMods || {};
+      const applied = [];
+      const power = source ? (source.magic > source.attack ? source.magic : source.attack) : 10;
+
+      if (payload.burn) {
+        const pct = payload.burn.dpsPct * (1 + (mods.burnBonus || 0));
+        status.burn = {
+          dps: status_power(power, pct),
+          remaining: payload.burn.durationMs / 1000,
+          source: source
+        };
+        applied.push('burn');
+      }
+      if (payload.poison) {
+        status.poison = {
+          dps: status_power(power, payload.poison.dpsPct),
+          remaining: payload.poison.durationMs / 1000,
+          source: source
+        };
+        applied.push('poison');
+      }
+      if (payload.slow) {
+        const factor = payload.slow.factor * (1 + (mods.chillBonus || 0));
+        status.slow = { factor: Utils.clamp(factor, 0, 0.9), remaining: payload.slow.durationMs / 1000 };
+        applied.push('slow');
+      }
+      if (payload.freezeMs) {
+        status.freezeMs = Math.max(status.freezeMs, payload.freezeMs);
+        applied.push('freeze');
+      }
+      if (payload.stunMs) {
+        status.stunMs = Math.max(status.stunMs, payload.stunMs);
+        applied.push('stun');
+      }
+      return applied;
+    }
+
+    /** Advance timers; returns damage-over-time that should be dealt this frame. */
+    function update(monster, dt) {
+      if (!monster.status) return 0;
+      const s = monster.status;
+
+      [ 'burn', 'poison' ].forEach(function (kind) {
+        const effect = s[kind];
+        if (!effect) return;
+        effect.remaining -= dt;
+        s.pool += effect.dps * dt;
+        if (effect.remaining <= 0) s[kind] = null;
+      });
+
+      if (s.slow) {
+        s.slow.remaining -= dt;
+        if (s.slow.remaining <= 0) s.slow = null;
+      }
+      s.freezeMs = Math.max(0, s.freezeMs - dt * 1000);
+      s.stunMs = Math.max(0, s.stunMs - dt * 1000);
+
+      s.poolTimer += dt;
+      let damage = 0;
+      if (s.poolTimer >= DOT_TICK_SECONDS) {
+        damage = s.pool;
+        s.pool = 0;
+        s.poolTimer = 0;
+      }
+      return damage;
+    }
+
+    function speedMultiplier(monster) {
+      const s = monster.status;
+      if (!s || !s.slow) return 1;
+      return Utils.clamp(1 - s.slow.factor, 0.15, 1);
+    }
+
+    /** Frozen or stunned monsters cannot move or attack. */
+    function isIncapacitated(monster) {
+      const s = monster.status;
+      return !!s && (s.freezeMs > 0 || s.stunMs > 0);
+    }
+
+    function labels(monster) {
+      const s = monster.status;
+      const out = [];
+      if (!s) return out;
+      if (s.burn) out.push({ id: 'burn', label: 'Burning' });
+      if (s.poison) out.push({ id: 'poison', label: 'Poisoned' });
+      if (s.freezeMs > 0) out.push({ id: 'freeze', label: 'Frozen' });
+      else if (s.slow) out.push({ id: 'slow', label: 'Chilled' });
+      if (s.stunMs > 0) out.push({ id: 'stun', label: 'Stunned' });
+      return out;
+    }
+
+    function clear(monster) { if (monster) monster.status = blank(); }
+
+    return {
+      apply: apply, update: update, speedMultiplier: speedMultiplier,
+      isIncapacitated: isIncapacitated, labels: labels, clear: clear,
+      isSlowed: function (m) { return !!(m.status && m.status.slow); },
+      isBurning: function (m) { return !!(m.status && (m.status.burn || m.status.poison)); },
+      isFrozen: function (m) { return !!(m.status && (m.status.freezeMs > 0 || m.status.stunMs > 0)); }
+    };
+  })();
+
+  /* ============================================================
+   * 3c. PROJECTILES — arrows, spells and thrown weapons
+   * ========================================================== */
+  const Projectiles = (function () {
+    const list = [];
+
+    function spawn(def, x, y, angle, payload) {
+      list.push({
+        def: def,
+        x: x, y: y,
+        angle: angle,
+        vx: Math.cos(angle) * def.speed,
+        vy: Math.sin(angle) * def.speed,
+        radius: def.radius || 6,
+        life: (payload && payload.life) || 2.2,
+        spin: 0,
+        payload: payload || {},
+        hit: []
+      });
+      if (list.length > 60) list.shift();
+    }
+
+    /** ctx: { onHit(projectile, monster), monsters(), onExpire(projectile), world } */
+    function update(dt, ctx) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const p = list[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        p.spin += dt * 12;
+
+        const outOfBounds = p.x < -40 || p.x > WORLD.width + 40 || p.y < -40 || p.y > WORLD.height + 40;
+        if (p.life <= 0 || outOfBounds) {
+          if (ctx.onExpire) ctx.onExpire(p);
+          list.splice(i, 1);
+          continue;
+        }
+
+        const targets = ctx.monsters() || [];
+        for (let m = 0; m < targets.length; m++) {
+          const monster = targets[m];
+          if (!monster.alive || p.hit.indexOf(monster) !== -1) continue;
+          const reach = p.radius + monster.radius;
+          if (Utils.distance(p.x, p.y, monster.pos.x, monster.pos.y) <= reach) {
+            ctx.onHit(p, monster);
+            p.hit.push(monster);
+            if (!p.payload.pierce) { list.splice(i, 1); }
+            break;
+          }
+        }
+      }
+    }
+
+    function clear() { list.length = 0; }
+
+    return { list: list, spawn: spawn, update: update, clear: clear };
+  })();
+
+  /* ============================================================
+   * 3d. SKILLS — cooldowns, buffs, rage and validity checks
+   *    (effect execution lives in Game.castSkill, which owns the world)
+   * ========================================================== */
+  const Skills = (function () {
+    const RAGE_MAX = 100;
+
+    function initPlayer(player) {
+      player.cooldowns = {};
+      player.buffs = [];
+      player.rage = 0;
+      player.stealthMs = 0;
+    }
+
+    function tick(player, dt) {
+      const ms = dt * 1000;
+      Object.keys(player.cooldowns).forEach(function (id) {
+        if (player.cooldowns[id] > 0) player.cooldowns[id] = Math.max(0, player.cooldowns[id] - ms);
+      });
+
+      let changed = false;
+      player.buffs = player.buffs.filter(function (buff) {
+        buff.remaining -= ms;
+        if (buff.remaining <= 0) { changed = true; return false; }
+        return true;
+      });
+      if (changed) Stats.recompute(player);
+
+      player.stealthMs = Math.max(0, player.stealthMs - ms);
+      if (player.rage > 0) player.rage = Utils.clamp(player.rage - dt * 3, 0, RAGE_MAX);   // slow decay
+      return changed;
+    }
+
+    /** Sum of class passive mods + active buff mods (numeric values only). */
+    function aggregateMods(player) {
+      const total = {};
+      const sources = [];
+      if (player.classDef && player.classDef.passive) sources.push(player.classDef.passive.mods || {});
+      (player.buffs || []).forEach(function (buff) { sources.push(buff.mods || {}); });
+
+      sources.forEach(function (mods) {
+        Object.keys(mods).forEach(function (key) {
+          if (typeof mods[key] !== 'number') return;
+          total[key] = (total[key] || 0) + mods[key];
+        });
+      });
+
+      if (hasRage(player)) total.attackPct = (total.attackPct || 0) + rageAttackBonus(player);
+      return total;
+    }
+
+    function hasRage(player) {
+      return !!(player.classDef && player.classDef.passive && player.classDef.passive.mods.rage);
+    }
+
+    function rageAttackBonus(player) {
+      return 0.25 * Utils.clamp((player.rage || 0) / RAGE_MAX, 0, 1);
+    }
+
+    /** Extra HP/MP per second granted by buffs (e.g. Divine Aegis). */
+    function buffRegen(player) {
+      let hp = 0;
+      (player.buffs || []).forEach(function (buff) { hp += buff.regenPerSecond || 0; });
+      return hp;
+    }
+
+    /** Poison applied by basic attacks while a buff (Venom Blades) is active. */
+    function attackPoison(player) {
+      let payload = null;
+      (player.buffs || []).forEach(function (buff) {
+        if (buff.poisonOnHit) payload = buff.poisonOnHit;
+      });
+      return payload;
+    }
+
+    function isStealthed(player) { return (player.stealthMs || 0) > 0; }
+
+    /** Crit bonus while stealthed (Smoke Bomb) or from buffs. */
+    function stealthCritBonus(player) {
+      let bonus = 0;
+      (player.buffs || []).forEach(function (buff) { if (buff.stealthCrit) bonus += buff.stealthCrit; });
+      return bonus;
+    }
+
+    function canCast(player, skill) {
+      if (!skill) return { ok: false, reason: 'unknown' };
+      if (player.downed) return { ok: false, reason: 'downed' };
+      if ((player.cooldowns[skill.id] || 0) > 0) return { ok: false, reason: 'cooldown' };
+      const rageCost = skill.params && skill.params.rageCost;
+      if (rageCost && player.rage < rageCost) return { ok: false, reason: 'rage' };
+      if (skill.mp > player.mp) return { ok: false, reason: 'mana' };
+      return { ok: true };
+    }
+
+    /** Deduct costs and start the cooldown. Returns true when the cast may proceed. */
+    function beginCast(player, skill) {
+      const check = canCast(player, skill);
+      if (!check.ok) return check;
+      if (skill.mp) player.mp = Math.max(0, player.mp - skill.mp);
+      const rageCost = skill.params && skill.params.rageCost;
+      if (rageCost) player.rage = Math.max(0, player.rage - rageCost);
+      player.cooldowns[skill.id] = skill.cooldownMs;
+      player.lastCast = skill.id;
+      return { ok: true };
+    }
+
+    function addBuff(player, id, name, mods, durationMs, extras) {
+      const extra = extras || {};
+      player.buffs = player.buffs.filter(function (b) { return b.id !== id; });
+      player.buffs.push({
+        id: id, name: name, mods: mods || {}, remaining: durationMs,
+        regenPerSecond: extra.regenPerSecond || 0,
+        poisonOnHit: extra.poisonOnHit || null,
+        stealthCrit: extra.stealthCrit || 0
+      });
+      Stats.recompute(player);
+    }
+
+    function addRage(player, amount) {
+      if (!hasRage(player)) return;
+      player.rage = Utils.clamp((player.rage || 0) + amount, 0, RAGE_MAX);
+    }
+
+    return {
+      RAGE_MAX: RAGE_MAX,
+      initPlayer: initPlayer, tick: tick, aggregateMods: aggregateMods,
+      buffRegen: buffRegen, attackPoison: attackPoison,
+      isStealthed: isStealthed, stealthCritBonus: stealthCritBonus,
+      canCast: canCast, beginCast: beginCast, addBuff: addBuff, addRage: addRage,
+      hasRage: hasRage, rageAttackBonus: rageAttackBonus
+    };
+  })();
+
+  /* ============================================================
+   * 3e. STATS — derive effective player stats from class + gear +
+   *     level + passives + buffs. Keeps player.attack etc. up to date
+   *     so all existing combat code keeps working unchanged.
+   * ========================================================== */
+  const Stats = (function () {
+    function recompute(player) {
+      const cls = player.classDef;
+      if (!cls) return player;
+
+      const base = cls.base || {};
+      const growth = cls.growth || {};
+      const bonus = DATA.gearBonus(cls);
+      const mods = Skills.aggregateMods(player);
+      const lv = Math.max(0, player.level - 1);
+      const num = function (key) { return (base[key] || 0) + (growth[key] || 0) * lv + (bonus[key] || 0); };
+
+      const prevMaxHp = player.maxHp || 1;
+      const hpRatio = player.hp !== undefined ? Utils.clamp(player.hp / prevMaxHp, 0, 1) : 1;
+
+      player.maxHp = Math.round(num('maxHp') * (1 + (mods.maxHpPct || 0)));
+      player.maxMp = Math.round(num('maxMp') * (1 + (mods.maxMpPct || 0)));
+      player.attack = Math.max(1, Math.round(num('attack') * (1 + (mods.attackPct || 0))));
+      player.defense = Math.max(0, Math.round(num('defense') * (1 + (mods.defensePct || 0)) + (mods.defense || 0)));
+      player.magic = Math.max(0, Math.round(num('magic') * (1 + (mods.magicPct || 0))));
+      player.speed = Math.max(40, Math.round(num('speed') * (1 + (mods.speedPct || 0))));
+
+      player.critChance = Utils.clamp((base.critChance || 0) + (bonus.critChance || 0) + (mods.critChance || 0), 0, 0.95);
+      player.critMultiplier = (base.critMultiplier || 1.6) + (mods.critDamage || 0);
+      player.evasion = Utils.clamp((base.evasion || 0) + (bonus.evasion || 0) + (mods.evasion || 0), 0, 0.75);
+      player.damageReduction = Utils.clamp(mods.damageReduction || 0, -0.5, 0.85);
+
+      player.attackCooldownMs = Math.max(180, (base.attackCooldownMs || 600) * (1 - Utils.clamp(bonus.attackSpeed || 0, 0, 0.5)));
+      player.attackRange = base.attackRange || PLAYER_DEF.attackRange;
+      player.autoTargetRange = base.autoTargetRange || 0;
+      player.attackType = cls.attackType || 'melee';
+
+      player.hpRegenPerSecond = (PLAYER_DEF.hpRegenPerSecond || 1.5) + Skills.buffRegen(player);
+      player.mpRegenPerSecond = (PLAYER_DEF.mpRegenPerSecond || 1) * (1 + (mods.mpRegenPct || 0));
+
+      if (player.hp !== undefined) player.hp = Utils.clamp(player.hp, 0, player.maxHp);
+      else player.hp = player.maxHp;
+      if (player.mp !== undefined) player.mp = Utils.clamp(player.mp, 0, player.maxMp);
+      else player.mp = player.maxMp;
+      void hpRatio;
+
+      return player;
+    }
+
+    return { recompute: recompute };
   })();
 
   /* ============================================================
    * 4. ENTITIES
    * ========================================================== */
-  function createPlayer() {
-    return {
+  function createPlayer(classId, name) {
+    const classDef = DATA.getClass(classId) || DATA.getClass(DATA.DEFAULT_CLASS);
+    const player = {
       kind: 'player',
-      id: PLAYER_DEF.id,
-      name: PLAYER_DEF.name,
-      title: PLAYER_DEF.title,
-      level: PLAYER_DEF.level,
-      hp: PLAYER_DEF.maxHp,
-      maxHp: PLAYER_DEF.maxHp,
-      mp: PLAYER_DEF.maxMp,
-      maxMp: PLAYER_DEF.maxMp,
-      attack: PLAYER_DEF.attack,
-      defense: PLAYER_DEF.defense,
-      speed: PLAYER_DEF.speed,
-      radius: PLAYER_DEF.radius,
-      exp: 0,
-      expToNext: PROGRESSION.baseExpToLevel,
-      gold: 0,
+      id: classDef.id,
+      name: (name && String(name).trim()) || PLAYER_DEF.name,
+      title: classDef.name,
+      classId: classDef.id,
+      classDef: classDef,
+      look: classDef.look,
+
+      level: 1,
+      hp: 0, maxHp: 0,
+      mp: 0, maxMp: 0,
+      attack: 0, defense: 0, magic: 0, speed: 0,
+      critChance: 0, critMultiplier: 1.6, evasion: 0, damageReduction: 0,
+
+      attackType: classDef.attackType || 'melee',
+      attackCooldownMs: 600, attackRange: PLAYER_DEF.attackRange, autoTargetRange: 0,
+
+      exp: 0, expToNext: PROGRESSION.baseExpToLevel, gold: 0,
+      weapon: DATA.getItem(classDef.weaponId),
+      armor: DATA.getItem(classDef.armorId),
+      skills: (classDef.skillIds || []).map(function (id) { return DATA.getSkill(id); }).filter(Boolean),
+
+      cooldowns: {}, buffs: [], rage: 0, stealthMs: 0, lastCast: null,
+
       pos: { x: PLAYER_DEF.spawn.x, y: PLAYER_DEF.spawn.y },
       facing: { x: PLAYER_DEF.facing.x, y: PLAYER_DEF.facing.y },
-      moving: false,
-      walkPhase: 0,
-      attackCooldown: 0,
-      attackAnim: 0,
-      hitFlash: 0,
-      hurtTimer: 0,
-      downed: false,
-      respawnTimer: 0,
-      kills: 0
+      moving: false, walkPhase: 0, radius: PLAYER_DEF.radius,
+
+      attackCooldown: 0, attackAnim: 0, attackKind: 'melee', hitFlash: 0, hurtTimer: 0,
+      downed: false, respawnTimer: 0, kills: 0
     };
+
+    Skills.initPlayer(player);
+    Stats.recompute(player);
+    player.hp = player.maxHp;
+    player.mp = player.maxMp;
+    return player;
   }
 
   function createMonster(def, zone) {
@@ -366,6 +772,7 @@
       hitFlash: 0,
       deathTimer: 0,
       respawnTimer: 0,
+      status: null,
       spawnPulse: 0,
       bob: Utils.randRange(0, Math.PI * 2)
     };
@@ -705,7 +1112,8 @@
       if (ctx.background) c.drawImage(ctx.background, 0, 0, WORLD.width, WORLD.height);
       else { c.fillStyle = ZONE.palette.groundBottom; c.fillRect(0, 0, WORLD.width, WORLD.height); }
 
-      const actors = [state.monster, state.player].filter(function (a) { return a; });
+      const monsters = state.monsters || (state.monster ? [state.monster] : []);
+      const actors = monsters.concat([state.player]).filter(function (a) { return a; });
       actors.sort(function (a, b) { return a.pos.y - b.pos.y; });
 
       actors.forEach(function (actor) {
@@ -713,6 +1121,7 @@
         else drawPlayer(c, actor, state);
       });
 
+      drawProjectiles(c);
       drawParticles(c);
       drawFloaters(c);
       c.restore();
@@ -725,23 +1134,377 @@
       c.fill();
     }
 
-    function drawPlayer(c, player, state) {
-      const p = player.pos;
-      const bob = player.moving ? Math.sin(player.walkPhase * 2) * 2 : Math.sin(state.time * 2) * 0.9;
-      const y = p.y + bob;
-      const facingLeft = player.facing.x < 0;
+    /* ---------- hero sprites (shared with the character-select preview) ---------- */
+    function drawCape(c, look) {
+      c.fillStyle = look.cloth || look.primary;
+      c.beginPath();
+      c.moveTo(-9, -8);
+      c.quadraticCurveTo(-17, 6, -12, 17);
+      c.lineTo(12, 17);
+      c.quadraticCurveTo(17, 6, 9, -8);
+      c.closePath();
+      c.fill();
+    }
 
-      if (player.downed) {
-        c.save();
-        c.globalAlpha = 0.45;
-        c.translate(p.x, p.y + 6);
-        c.rotate(Math.PI / 2.4);
-        c.translate(-p.x, -p.y);
+    function drawBody(c, look) {
+      const primary = look.primary || '#3f5ecf';
+      const secondary = look.secondary || primary;
+      const bare = look.bareArms;
+
+      if (look.robe) {
+        // flowing robe down to the ground
+        c.fillStyle = primary;
+        c.beginPath();
+        c.moveTo(-9, -9);
+        c.quadraticCurveTo(-16, 8, -13, 15);
+        c.lineTo(13, 15);
+        c.quadraticCurveTo(16, 8, 9, -9);
+        c.closePath();
+        c.fill();
+        c.fillStyle = secondary;
+        c.beginPath();
+        c.moveTo(-6, -7);
+        c.quadraticCurveTo(-9, 8, -6, 14);
+        c.lineTo(6, 14);
+        c.quadraticCurveTo(9, 8, 6, -7);
+        c.closePath();
+        c.fill();
+      } else {
+        // legs
+        c.fillStyle = bare ? (look.skin || '#e8b183') : (look.cloth || '#2b3a7a');
+        c.fillRect(-7, 4, 6, 11);
+        c.fillRect(1, 4, 6, 11);
+        c.fillStyle = '#3a2a1c';
+        c.fillRect(-8, 13, 7, 4);
+        c.fillRect(1, 13, 7, 4);
+        // torso
+        c.fillStyle = primary;
+        c.beginPath();
+        c.moveTo(-11, 6);
+        c.quadraticCurveTo(-13, -6, 0, -9);
+        c.quadraticCurveTo(13, -6, 11, 6);
+        c.closePath();
+        c.fill();
+        c.fillStyle = secondary;
+        c.beginPath();
+        c.moveTo(-7, 5);
+        c.quadraticCurveTo(-9, -4, 0, -7);
+        c.quadraticCurveTo(9, -4, 7, 5);
+        c.closePath();
+        c.fill();
       }
 
-      drawShadow(c, p.x, p.y, player.radius, 0.32);
+      // belt / sash
+      c.fillStyle = look.accent || '#a8792f';
+      c.fillRect(-10, 5, 20, 3.4);
+      c.fillStyle = look.metal || '#d8d2b0';
+      c.fillRect(-2.4, 5, 4.8, 3.4);
 
-      // Respawn aura while downed
+      // bare arms for the berserker / dragon knight
+      if (bare) {
+        c.fillStyle = look.skin || '#e8b183';
+        c.beginPath();
+        c.ellipse(-11, -2, 3.6, 7, 0.25, 0, Math.PI * 2);
+        c.fill();
+        c.beginPath();
+        c.ellipse(11, -2, 3.6, 7, -0.25, 0, Math.PI * 2);
+        c.fill();
+      }
+
+      // shoulder guard
+      if (look.metal) {
+        c.fillStyle = look.metal;
+        c.beginPath();
+        c.ellipse(-10, -6, 5.4, 4, -0.3, 0, Math.PI * 2);
+        c.fill();
+        c.beginPath();
+        c.ellipse(10, -6, 5.4, 4, 0.3, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+
+    function drawHead(c, look, facing) {
+      // head
+      c.fillStyle = look.skin || '#f2c79c';
+      c.beginPath();
+      c.arc(0, -17, 8.4, 0, Math.PI * 2);
+      c.fill();
+
+      // hood or hair
+      if (look.hood) {
+        c.fillStyle = look.cloth || '#191428';
+        c.beginPath();
+        c.arc(0, -18, 9.4, Math.PI * 0.92, Math.PI * 2.08);
+        c.fill();
+        c.beginPath();
+        c.moveTo(-9, -16);
+        c.quadraticCurveTo(-11, -6, -6, -4);
+        c.lineTo(6, -4);
+        c.quadraticCurveTo(11, -6, 9, -16);
+        c.closePath();
+        c.fill();
+      } else {
+        c.fillStyle = look.hair || '#4a3320';
+        c.beginPath();
+        c.arc(0, -19, 8.6, Math.PI * 1.02, Math.PI * 2.02);
+        c.fill();
+        c.beginPath();
+        c.ellipse(facing < 0 ? 6 : -6, -18, 3.2, 5.6, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+
+      // helmet
+      if (look.helm) {
+        c.fillStyle = look.metal || '#b9c2d6';
+        c.beginPath();
+        c.arc(0, -18.5, 9.2, Math.PI, Math.PI * 2);
+        c.fill();
+        c.fillRect(-9.2, -19, 18.4, 3);
+        c.fillStyle = look.accent || '#f2c14e';
+        c.fillRect(-1.6, -27, 3.2, 5);
+      }
+
+      // dragon horns
+      if (look.horns) {
+        c.fillStyle = look.accent || '#d9a05a';
+        [[-1, -1], [1, 1]].forEach(function (dir) {
+          c.beginPath();
+          c.moveTo(dir[0] * 5, -25);
+          c.quadraticCurveTo(dir[0] * 13, -32, dir[0] * 7, -36);
+          c.quadraticCurveTo(dir[0] * 8, -29, dir[0] * 2, -24);
+          c.closePath();
+          c.fill();
+        });
+      }
+
+      // eyes
+      if (!look.helm) {
+        c.fillStyle = '#25313f';
+        const shift = facing < 0 ? -1.6 : 1.6;
+        c.beginPath(); c.arc(-3 + shift, -16, 1.4, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.arc(3 + shift, -16, 1.4, 0, Math.PI * 2); c.fill();
+      }
+
+      // scarf / mask
+      if (look.scarf) {
+        c.fillStyle = look.accent || '#c23b3b';
+        c.fillRect(-8.6, -12.6, 17.2, 4);
+      }
+    }
+
+    function drawWeapon(c, look, facing, attack, attackKind) {
+      const type = look.weapon || 'sword';
+      const t = 1 - attack;
+      const swing = facing * (-2.3 + t * 3.0);
+      const metal = look.metal || '#c9d4ea';
+      const accent = look.accent || '#a8792f';
+
+      c.save();
+      c.scale(facing, 1);         // weapons are drawn facing right, then mirrored
+
+      if (type === 'sword-shield' || type === 'sword') {
+        if (attack > 0) {
+          c.save();
+          c.translate(2, -8);
+          c.rotate(-1.9 + t * 2.6);
+          c.fillStyle = metal; c.fillRect(0, -1.7, 25, 3.4);
+          c.fillStyle = '#8b93a8'; c.fillRect(0, -1.7, 6, 3.4);
+          c.fillStyle = accent; c.fillRect(-4.4, -3.6, 4.4, 7.2);
+          c.restore();
+        } else {
+          c.save();
+          c.translate(2, -6);
+          c.rotate(0.42);
+          c.fillStyle = metal; c.fillRect(-2, -21, 3.4, 23);
+          c.fillStyle = '#8b93a8'; c.fillRect(-2, -21, 3.4, 5);
+          c.fillStyle = accent; c.fillRect(-4, 0, 7.4, 3.4);
+          c.restore();
+        }
+        if (look.shield) {
+          c.save();
+          c.translate(-3.5, -6);
+          c.rotate(0.12);
+          c.fillStyle = look.secondary || '#e8e2d0';
+          c.beginPath();
+          c.moveTo(-9, -8); c.lineTo(9, -8); c.lineTo(9, 4);
+          c.quadraticCurveTo(0, 13, -9, 4);
+          c.closePath(); c.fill();
+          c.fillStyle = accent;
+          c.beginPath();
+          c.moveTo(-3, -6); c.lineTo(3, -6); c.lineTo(3, 3); c.lineTo(0, 6.5); c.lineTo(-3, 3);
+          c.closePath(); c.fill();
+          c.strokeStyle = 'rgba(0,0,0,0.25)'; c.lineWidth = 1.2; c.stroke();
+          c.restore();
+        }
+      }
+
+      if (type === 'greataxe') {
+        c.save();
+        c.translate(6, -4);
+        c.rotate(attack > 0 ? (-2.0 + t * 2.8) : 0.82);
+        c.fillStyle = '#6b4a2a'; c.fillRect(-2, -20, 4, 40);
+        c.fillStyle = metal;
+        c.beginPath();
+        c.moveTo(0, -21);
+        c.quadraticCurveTo(17, -17, 15, -3);
+        c.quadraticCurveTo(8, -8, 0, -7);
+        c.closePath(); c.fill();
+        c.beginPath();
+        c.moveTo(0, -21);
+        c.quadraticCurveTo(-15, -18, -14, -5);
+        c.quadraticCurveTo(-8, -8, 0, -7);
+        c.closePath(); c.fill();
+        c.fillStyle = accent; c.fillRect(-2.4, -22, 4.8, 4);
+        c.restore();
+      }
+
+      if (type === 'daggers' || type === 'dual-blades') {
+        const long = type === 'dual-blades';
+        const bladeLen = long ? 22 : 13;
+        // off-hand blade
+        c.save();
+        c.translate(-12, -1);
+        c.rotate(-0.85);
+        c.fillStyle = '#8b93a8'; c.fillRect(-1.6, -bladeLen, 3.2, bladeLen);
+        c.fillStyle = accent; c.fillRect(-3, -1.6, 6, 3.2);
+        c.restore();
+        // main blade
+        c.save();
+        c.translate(4, -2);
+        c.rotate(attack > 0 ? (-1.9 + t * 2.9) : 0.8);
+        c.fillStyle = metal; c.fillRect(-1.8, -bladeLen, 3.6, bladeLen);
+        c.fillStyle = '#8b93a8'; c.fillRect(-1.8, -bladeLen, 3.6, bladeLen * 0.3);
+        c.fillStyle = accent; c.fillRect(-3.4, -1.8, 6.8, 3.6);
+        c.restore();
+      }
+
+      if (type === 'bow') {
+        const draw = attack > 0 ? 1 - Math.abs(0.5 - t) * 2 : 0;   // string pull
+        c.save();
+        c.translate(6, -7);
+        c.rotate(0.24);
+        c.strokeStyle = '#7a5230'; c.lineWidth = 3.2; c.lineCap = 'round';
+        c.beginPath();
+        c.moveTo(0, -20);
+        c.quadraticCurveTo(13, 0, 0, 20);
+        c.stroke();
+        c.strokeStyle = 'rgba(240,240,255,0.75)'; c.lineWidth = 1.1;
+        c.beginPath();
+        c.moveTo(0, -20);
+        c.lineTo(-5 - draw * 7, 0);
+        c.lineTo(0, 20);
+        c.stroke();
+        if (attack > 0) {
+          c.fillStyle = '#e8d9a0';
+          c.fillRect(-8 - draw * 6, -1, 18, 2);
+        }
+        c.restore();
+      }
+
+      if (type === 'staff') {
+        const casting = attack > 0 && attackKind === 'cast';
+        c.save();
+        c.translate(7, -6);
+        c.rotate(casting ? -0.35 : 0.2);
+        c.fillStyle = '#6b4a2a';
+        c.fillRect(-2, -22, 4, 42);
+        c.fillStyle = accent;
+        c.beginPath(); c.arc(0, -25, 5.6, 0, Math.PI * 2); c.fill();
+        c.globalAlpha = casting ? 0.95 : 0.55;
+        c.fillStyle = look.aura || accent;
+        c.beginPath(); c.arc(0, -25, casting ? 7.6 : 4.4, 0, Math.PI * 2); c.fill();
+        c.restore();
+      }
+
+      if (type === 'dragon-greatsword') {
+        c.save();
+        c.translate(3, -9);
+        c.rotate(attack > 0 ? (-2.2 + t * 3.0) : -0.42);
+        c.fillStyle = metal;
+        c.beginPath();
+        c.moveTo(0, -2);
+        c.lineTo(30, -1.4);
+        c.lineTo(26, 3.4);
+        c.lineTo(0, 2.6);
+        c.closePath(); c.fill();
+        c.fillStyle = '#8b93a8';
+        c.beginPath();
+        c.moveTo(0, -6.5); c.lineTo(27, -3.2); c.lineTo(30, -1.4); c.lineTo(0, -2);
+        c.closePath(); c.fill();
+        c.fillStyle = accent;
+        c.fillRect(-4.6, -5, 4.6, 10);
+        c.fillStyle = look.primary || '#6b1f24';
+        c.fillRect(-9, -2.2, 5, 4.4);
+        c.restore();
+      }
+
+      c.restore();
+    }
+
+    /**
+     * Draw a hero. Shared by the world renderer and the character-select preview.
+     * opts: { look, x, y, scale, facing, walkPhase, moving, attackAnim,
+     *         attackKind, time, alpha, downed, stealth }
+     */
+    function drawHero(c, opts) {
+      const o = opts || {};
+      const look = o.look || {};
+      const facing = o.facing === undefined ? 1 : (o.facing >= 0 ? 1 : -1);
+      const attack = o.attackAnim || 0;
+      const walk = Math.sin((o.walkPhase || 0) * 2) * (o.moving ? 1.8 : 0);
+      const bob = o.moving ? walk : Math.sin((o.time || 0) * 2) * 0.9;
+
+      c.save();
+      c.translate(o.x || 0, o.y || 0);
+      if (o.scale && o.scale !== 1) c.scale(o.scale, o.scale);
+      if (o.alpha !== undefined) c.globalAlpha = o.alpha;
+
+      if (o.downed) {
+        c.rotate(Math.PI / 2.4);
+        c.globalAlpha = (o.alpha === undefined ? 1 : o.alpha) * 0.75;
+      }
+
+      // shadow
+      c.fillStyle = 'rgba(10,20,10,0.3)';
+      c.beginPath();
+      c.ellipse(0, 0, 17, 6, 0, 0, Math.PI * 2);
+      c.fill();
+
+      c.translate(0, bob);
+
+      // magic aura: a soft glow that sits behind the body, never over the face
+      if (look.aura) {
+        const pulse = 0.55 + Math.sin((o.time || 0) * 3) * 0.15;
+        const baseAlpha = (o.alpha === undefined ? 1 : o.alpha) * pulse;
+        const glow = c.createRadialGradient(0, -6, 4, 0, -6, 34);
+        glow.addColorStop(0, Utils.rgba(look.aura, 0.34 * baseAlpha));
+        glow.addColorStop(0.55, Utils.rgba(look.aura, 0.16 * baseAlpha));
+        glow.addColorStop(1, Utils.rgba(look.aura, 0));
+        c.fillStyle = glow;
+        c.beginPath();
+        c.ellipse(0, -6, 30, 38, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+
+      if (look.cape) drawCape(c, look);
+
+      if (o.stealth) {
+        c.globalAlpha = (o.alpha === undefined ? 1 : o.alpha) * 0.45;
+      }
+
+      drawBody(c, look);
+      drawHead(c, look, facing);
+      drawWeapon(c, look, facing, attack, o.attackKind);
+
+      c.restore();
+    }
+
+    function drawPlayer(c, player, state) {
+      const p = player.pos;
+      const isPlayer = state.player === player;
+      const stealthed = Skills.isStealthed(player);
+
+      // respawn aura while downed
       if (player.downed) {
         c.fillStyle = 'rgba(120,160,255,0.18)';
         c.beginPath();
@@ -749,118 +1512,108 @@
         c.fill();
       }
 
-      c.save();
-      c.translate(p.x, y);
-
-      // Slash arc while attacking
-      if (player.attackAnim > 0) {
-        const t = 1 - player.attackAnim;
-        const dir = facingLeft ? -1 : 1;
+      // stealth shimmer
+      if (stealthed) {
         c.save();
-        c.translate(dir * 6, -4);
-        c.rotate(dir * (-1.7 + t * 2.4));
-        c.strokeStyle = 'rgba(255,247,214,' + (0.85 * player.attackAnim) + ')';
-        c.lineWidth = 5;
-        c.lineCap = 'round';
+        c.globalAlpha = 0.5;
+        c.strokeStyle = 'rgba(180,200,255,0.7)';
+        c.setLineDash([5, 5]);
+        c.lineWidth = 2;
         c.beginPath();
-        c.arc(0, 0, player.radius + 16, -0.9, 0.5);
-        c.stroke();
-        c.strokeStyle = 'rgba(255,205,120,' + (0.4 * player.attackAnim) + ')';
-        c.lineWidth = 10;
-        c.beginPath();
-        c.arc(0, 0, player.radius + 20, -0.8, 0.4);
+        c.ellipse(p.x, p.y - 6, player.radius + 10, player.radius + 16, 0, 0, Math.PI * 2);
         c.stroke();
         c.restore();
       }
 
-      // Cloak / body
-      c.fillStyle = '#3f5ecf';
-      c.beginPath();
-      c.moveTo(-11, 12);
-      c.quadraticCurveTo(-13, -6, 0, -9);
-      c.quadraticCurveTo(13, -6, 11, 12);
-      c.closePath();
-      c.fill();
+      drawHero(c, {
+        look: player.look,
+        x: p.x,
+        y: p.y,
+        facing: player.facing.x === 0 ? 1 : (player.facing.x < 0 ? -1 : 1),
+        walkPhase: player.walkPhase,
+        moving: player.moving,
+        attackAnim: player.attackAnim,
+        attackKind: player.attackType === 'ranged' ? 'cast' : 'melee',
+        time: state.time,
+        downed: player.downed,
+        stealth: stealthed,
+        alpha: isPlayer && player.hitFlash > 0 ? 1 : 1
+      });
 
-      // Tunic highlight
-      c.fillStyle = '#5c7ae8';
-      c.beginPath();
-      c.moveTo(-8, 11);
-      c.quadraticCurveTo(-9, -4, 0, -7);
-      c.quadraticCurveTo(9, -4, 8, 11);
-      c.closePath();
-      c.fill();
-
-      // Belt
-      c.fillStyle = '#7a5a2e';
-      c.fillRect(-10, 6, 20, 4);
-      c.fillStyle = '#f2c14e';
-      c.fillRect(-2.5, 6, 5, 4);
-
-      // Head
-      c.fillStyle = '#f2c79c';
-      c.beginPath();
-      c.arc(0, -17, 8.5, 0, Math.PI * 2);
-      c.fill();
-
-      // Hair / hood
-      c.fillStyle = '#4a3320';
-      c.beginPath();
-      c.arc(0, -19, 8.6, Math.PI * 1.05, Math.PI * 2.0);
-      c.fill();
-      c.beginPath();
-      c.ellipse(facingLeft ? 6 : -6, -18, 3.4, 6, 0, 0, Math.PI * 2);
-      c.fill();
-
-      // Eyes
-      c.fillStyle = '#25313f';
-      const eyeShift = player.facing.x * 1.6;
-      c.beginPath(); c.arc(-3 + eyeShift, -16, 1.4, 0, Math.PI * 2); c.fill();
-      c.beginPath(); c.arc(3 + eyeShift, -16, 1.4, 0, Math.PI * 2); c.fill();
-
-      // Sword on the back / in hand while swinging
-      c.save();
-      if (player.attackAnim > 0) {
-        const t = 1 - player.attackAnim;
-        const dir = facingLeft ? -1 : 1;
-        c.translate(dir * 12, -6);
-        c.rotate(dir * (-2.2 + t * 3.0));
-        c.fillStyle = '#c9d4ea';
-        c.fillRect(0, -1.6, 26, 3.2);
-        c.fillStyle = '#8b93a8';
-        c.fillRect(0, -1.6, 6, 3.2);
-        c.fillStyle = '#a8792f';
-        c.fillRect(-4, -3.4, 4, 6.8);
-      } else {
-        c.translate(-(facingLeft ? -1 : 1) * 2, -6);
-        c.rotate(0.5);
-        c.fillStyle = '#b8c2d8';
-        c.fillRect(-2, -22, 3.4, 24);
-        c.fillStyle = '#8b93a8';
-        c.fillRect(-2, -22, 3.4, 5);
-        c.fillStyle = '#a8792f';
-        c.fillRect(-4, 0, 7.4, 3.4);
-      }
-      c.restore();
-
-      c.restore(); // translate
-
-      // Hit flash
       if (player.hitFlash > 0) {
         c.save();
-        c.globalAlpha = Utils.clamp(player.hitFlash, 0, 1) * 0.55;
+        c.globalAlpha = Utils.clamp(player.hitFlash, 0, 1) * 0.5;
         c.fillStyle = '#ff6b6b';
         c.beginPath();
-        c.arc(p.x, y - 6, player.radius + 6, 0, Math.PI * 2);
+        c.arc(p.x, p.y - 8, player.radius + 7, 0, Math.PI * 2);
         c.fill();
         c.restore();
       }
 
-      if (player.downed) c.restore();
+      // name plate (stacked: name → level → HP bar)
+      drawNameTag(c, p.x, p.y - 52, player.name, 'Lv. ' + player.level + ' ' + player.title, '#ffe9a8');
+      drawMiniBar(c, p.x, p.y - 34, 46, 5, player.hp / player.maxHp, '#ff5f6d', '#3a0d12');
+    }
 
-      // Name plate (stacked: name → level → HP bar)
-      drawNameTag(c, p.x, y - 52, player.name, 'Lv. ' + player.level, '#ffe9a8');
-      drawMiniBar(c, p.x, y - 34, 46, 5, player.hp / player.maxHp, '#ff5f6d', '#3a0d12');
+    function drawProjectiles(c) {
+      c.save();
+      Projectiles.list.forEach(function (p) {
+        const def = p.def;
+        const angle = Math.atan2(p.vy, p.vx);
+        c.save();
+        c.translate(p.x, p.y);
+
+        // trail
+        if (def.trail) {
+          c.globalAlpha = 0.45;
+          c.strokeStyle = def.trail;
+          c.lineWidth = p.radius * 1.3;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(0, 0);
+          c.lineTo(-Math.cos(angle) * p.radius * 3.4, -Math.sin(angle) * p.radius * 3.4);
+          c.stroke();
+          c.globalAlpha = 1;
+        }
+
+        if (def.style === 'arrow') {
+          c.rotate(angle);
+          c.fillStyle = def.color;
+          c.fillRect(0, -1.4, 18, 2.8);
+          c.fillStyle = '#9aa6c4';
+          c.beginPath();
+          c.moveTo(18, -3.4); c.lineTo(25, 0); c.lineTo(18, 3.4);
+          c.closePath(); c.fill();
+        } else if (def.style === 'shard') {
+          c.rotate(angle + p.spin * 0.2);
+          c.fillStyle = def.color;
+          c.beginPath();
+          c.moveTo(9, 0); c.lineTo(0, -5); c.lineTo(-7, 0); c.lineTo(0, 5);
+          c.closePath(); c.fill();
+          c.strokeStyle = def.trail; c.lineWidth = 1.4; c.stroke();
+        } else if (def.style === 'star') {
+          c.rotate(p.spin);
+          c.fillStyle = def.color;
+          for (let i = 0; i < 4; i++) {
+            c.rotate(Math.PI / 2);
+            c.beginPath();
+            c.moveTo(0, 0); c.lineTo(p.radius * 1.3, -p.radius * 0.4); c.lineTo(p.radius * 1.3, p.radius * 0.4);
+            c.closePath(); c.fill();
+          }
+        } else {
+          // glowing orb
+          const grad = c.createRadialGradient(-p.radius * 0.3, -p.radius * 0.3, 1, 0, 0, p.radius * 1.4);
+          grad.addColorStop(0, '#ffffff');
+          grad.addColorStop(0.45, def.color);
+          grad.addColorStop(1, def.trail || def.color);
+          c.fillStyle = grad;
+          c.beginPath();
+          c.arc(0, 0, p.radius, 0, Math.PI * 2);
+          c.fill();
+        }
+        c.restore();
+      });
+      c.restore();
     }
 
     function drawMonster(c, monster, state) {
@@ -957,6 +1710,56 @@
         c.globalAlpha = 1;
       }
 
+      // --- status effects ---
+      if (Statuses.isFrozen(monster)) {
+        c.globalAlpha = 0.5;
+        c.fillStyle = '#bfefff';
+        c.beginPath();
+        c.ellipse(0, 0, w * 1.12, h * 1.2, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 0.9;
+        c.fillStyle = '#eafaff';
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2 + state.time;
+          c.beginPath();
+          c.moveTo(Math.cos(a) * w * 0.9, Math.sin(a) * h * 0.9 - 4);
+          c.lineTo(Math.cos(a) * w * 1.35, Math.sin(a) * h * 1.35 + 6);
+          c.lineTo(Math.cos(a) * w * 1.5, Math.sin(a) * h * 0.6 - 4);
+          c.closePath();
+          c.fill();
+        }
+        c.globalAlpha = 1;
+      } else if (Statuses.isSlowed(monster)) {
+        c.globalAlpha = 0.28;
+        c.fillStyle = '#8fe3ff';
+        c.beginPath();
+        c.ellipse(0, 0, w * 1.1, h * 1.12, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+      }
+
+      if (Statuses.isBurning(monster)) {
+        for (let i = 0; i < 3; i++) {
+          const phase = state.time * 6 + i * 2.1;
+          const fx = Math.sin(phase) * w * 0.65;
+          const fy = -h - 4 - (Math.sin(phase * 1.4) * 0.5 + 0.5) * 12;
+          c.fillStyle = monster.status && monster.status.poison ? 'rgba(155,227,106,0.75)' : 'rgba(255,155,74,0.8)';
+          c.beginPath();
+          c.ellipse(fx, fy, 3.2, 5.4, Math.sin(phase) * 0.6, 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+
+      if (monster.status && monster.status.stunMs > 0) {
+        c.fillStyle = '#ffe9a8';
+        for (let i = 0; i < 3; i++) {
+          const a = state.time * 5 + (i / 3) * Math.PI * 2;
+          c.beginPath();
+          c.arc(Math.cos(a) * 16, -h - 12 + Math.sin(a) * 4, 2.2, 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+
       c.restore();
 
       // Enemy name plate (stacked: name → level → HP bar)
@@ -1042,6 +1845,7 @@
       init: init,
       resize: resize,
       render: render,
+      drawHero: drawHero,
       context2d: function () { return ctx.ctx2d; },
       getBackground: function () { return ctx.background; }
     };
@@ -1057,6 +1861,15 @@
     function init(doc) {
       el.name = doc.getElementById('player-name');
       el.level = doc.getElementById('player-level');
+      el.emblem = doc.getElementById('player-emblem');
+      el.portrait = doc.getElementById('player-portrait');
+      el.gear = doc.getElementById('player-gear');
+      el.rageRow = doc.getElementById('rage-row');
+      el.rageFill = doc.getElementById('rage-fill');
+      el.rageValue = doc.getElementById('rage-value');
+      el.rageBar = doc.getElementById('rage-bar');
+      el.skillBar = doc.getElementById('skill-bar');
+      el.targetStatus = doc.getElementById('target-status');
       el.hpFill = doc.getElementById('hp-fill');
       el.hpValue = doc.getElementById('hp-value');
       el.hpBar = doc.getElementById('hp-bar');
@@ -1110,6 +1923,20 @@
       const levelText = 'Lv. ' + player.level + ' ' + (player.title || '');
       if (cache.level !== levelText) { el.level.textContent = levelText; cache.level = levelText; }
 
+      const emblemText = player.classDef ? player.classDef.emblem : '\u2694';
+      if (cache.emblem !== emblemText && el.emblem) { el.emblem.textContent = emblemText; cache.emblem = emblemText; }
+      if (el.portrait && player.look && cache.portrait !== player.classId) {
+        el.portrait.style.borderColor = player.look.accent || '#8a6d2f';
+        el.portrait.style.color = player.look.accent || '#f2c14e';
+        cache.portrait = player.classId;
+      }
+
+      const gearText = (player.weapon ? player.weapon.name : '—') + ' \u00B7 ' + (player.armor ? player.armor.name : '—');
+      if (cache.gear !== gearText && el.gear) { el.gear.textContent = gearText; cache.gear = gearText; }
+
+      renderRage(player);
+      renderSkillBar(player);
+
       const goldText = String(player.gold);
       if (cache.gold !== goldText) { el.gold.textContent = goldText; cache.gold = goldText; }
 
@@ -1133,6 +1960,7 @@
           const hpText = Math.max(0, Math.round(monster.hp)) + ' / ' + monster.maxHp;
           if (cache.targetHpText !== hpText) { el.targetHpValue.textContent = hpText; cache.targetHpText = hpText; }
         }
+        renderStatusChips(monster);
       }
 
       if (el.attackButton) {
@@ -1145,11 +1973,107 @@
       }
     }
 
+    /** Build one button per class skill. Rebuilt whenever a character is created. */
+    function buildSkillBar(player) {
+      if (!el.skillBar) return;
+      el.skillBar.innerHTML = '';
+      cache.skills = {};
+      (player.skills || []).forEach(function (skill, index) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'skill-btn';
+        button.setAttribute('data-skill-slot', String(index));
+        button.setAttribute('data-skill-id', skill.id);
+        button.setAttribute('aria-label', skill.name);
+        button.title = skill.name + ' — ' + skill.description;
+
+        const glyph = document.createElement('span');
+        glyph.className = 'skill-btn__glyph';
+        glyph.textContent = skill.glyph || '\u25C6';
+
+        const text = document.createElement('span');
+        text.className = 'skill-btn__text';
+        const name = document.createElement('span');
+        name.className = 'skill-btn__name';
+        name.textContent = skill.name;
+        const cost = document.createElement('span');
+        cost.className = 'skill-btn__cost';
+        const rageCost = skill.params && skill.params.rageCost;
+        cost.textContent = rageCost ? (rageCost + ' RAGE') : (skill.mp > 0 ? (skill.mp + ' MP') : 'FREE');
+        text.appendChild(name);
+        text.appendChild(cost);
+
+        const cd = document.createElement('span');
+        cd.className = 'skill-btn__cd';
+        const cdTime = document.createElement('span');
+        cdTime.className = 'skill-btn__cdtime';
+
+        button.appendChild(glyph);
+        button.appendChild(text);
+        button.appendChild(cd);
+        button.appendChild(cdTime);
+        el.skillBar.appendChild(button);
+
+        cache.skills[skill.id] = { button: button, cd: cd, time: cdTime, label: null, disabled: null };
+      });
+    }
+
+    function renderSkillBar(player) {
+      (player.skills || []).forEach(function (skill) {
+        const entry = cache.skills && cache.skills[skill.id];
+        if (!entry) return;
+        const remaining = player.cooldowns[skill.id] || 0;
+        const fraction = skill.cooldownMs > 0 ? Utils.clamp(remaining / skill.cooldownMs, 0, 1) : 0;
+        entry.cd.style.transform = 'scaleY(' + fraction.toFixed(3) + ')';
+
+        const seconds = remaining > 0 ? (Math.ceil(remaining / 100) / 10).toFixed(1) + 's' : '';
+        if (entry.time.textContent !== seconds) entry.time.textContent = seconds;
+
+        const check = Skills.canCast(player, skill);
+        const disabled = !check.ok;
+        if (entry.disabled !== disabled) {
+          entry.button.disabled = disabled;
+          entry.disabled = disabled;
+        }
+        const rageless = check.reason === 'rage';
+        if (entry.label !== rageless) {
+          entry.button.classList.toggle('is-rageless', rageless);
+          entry.label = rageless;
+        }
+      });
+    }
+
+    function renderRage(player) {
+      const hasRage = Skills.hasRage(player);
+      if (el.rageRow && cache.hasRage !== hasRage) {
+        el.rageRow.hidden = !hasRage;
+        cache.hasRage = hasRage;
+      }
+      if (hasRage) {
+        setBar(el.rageFill, el.rageValue, el.rageBar, player.rage, Skills.RAGE_MAX, 'Rage');
+      }
+    }
+
+    function renderStatusChips(monster) {
+      if (!el.targetStatus || !monster) return;
+      const labels = monster.alive ? Statuses.labels(monster) : [];
+      const signature = labels.map(function (l) { return l.id; }).join(',');
+      if (cache.statusSignature === signature) return;
+      cache.statusSignature = signature;
+      el.targetStatus.innerHTML = '';
+      labels.forEach(function (label) {
+        const chip = document.createElement('li');
+        chip.className = 'chip chip--' + label.id;
+        chip.textContent = label.label;
+        el.targetStatus.appendChild(chip);
+      });
+    }
+
     function setZone(name) {
       if (el.zone && cache.zone !== name) { el.zone.textContent = name; cache.zone = name; }
     }
 
-    return { el: el, init: init, render: render, setZone: setZone };
+    return { el: el, init: init, render: render, setZone: setZone, buildSkillBar: buildSkillBar };
   })();
 
   /* ============================================================
@@ -1177,15 +2101,487 @@
   })();
 
   /* ============================================================
+   * 8b. CHARACTER SELECT — the class picker screen
+   * ========================================================== */
+  const CharacterSelect = (function () {
+    const ui = {};
+    let selectedId = null;
+    let rafId = 0;
+    let loopRunning = false;
+
+    const STAT_ROWS = [
+      { key: 'maxHp', label: 'HP', className: 'stat--hp' },
+      { key: 'attack', label: 'ATK', className: 'stat--atk' },
+      { key: 'defense', label: 'DEF', className: 'stat--def' },
+      { key: 'speed', label: 'SPD', className: 'stat--spd' },
+      { key: 'magic', label: 'MAG', className: 'stat--mag' }
+    ];
+
+    const BONUS_LABELS = {
+      attack: 'Attack', defense: 'Defense', magic: 'Magic', maxHp: 'HP', maxMp: 'MP',
+      speed: 'Speed', critChance: 'Crit', evasion: 'Evasion', attackSpeed: 'Atk Speed'
+    };
+
+    /** Per-stat maxima so preview bars are comparable between classes. */
+    function statMaxima() {
+      const max = {};
+      STAT_ROWS.forEach(function (row) { max[row.key] = 1; });
+      DATA.classList().forEach(function (cls) {
+        const stats = DATA.effectiveBaseStats(cls);
+        STAT_ROWS.forEach(function (row) { max[row.key] = Math.max(max[row.key], stats[row.key]); });
+      });
+      return max;
+    }
+
+    /* ---------- rendering ---------- */
+    function buildCards() {
+      if (!ui.grid) return;
+      ui.grid.innerHTML = '';
+      ui.cards = {};
+
+      DATA.classList().forEach(function (cls) {
+        const card = ui.doc.createElement('button');
+        card.type = 'button';
+        card.className = 'class-card';
+        card.setAttribute('data-class', cls.id);
+        card.setAttribute('role', 'option');
+        card.setAttribute('aria-selected', 'false');
+
+        const art = ui.doc.createElement('span');
+        art.className = 'class-card__art';
+        const canvas = ui.doc.createElement('canvas');
+        canvas.width = 124;
+        canvas.height = 148;
+        art.appendChild(canvas);
+
+        const body = ui.doc.createElement('span');
+        body.className = 'class-card__body';
+
+        const top = ui.doc.createElement('span');
+        top.className = 'class-card__top';
+        const name = ui.doc.createElement('span');
+        name.className = 'class-card__name';
+        name.textContent = cls.name;
+        const role = ui.doc.createElement('span');
+        role.className = 'class-card__role';
+        role.textContent = cls.role;
+        top.appendChild(name);
+        top.appendChild(role);
+
+        const desc = ui.doc.createElement('span');
+        desc.className = 'class-card__desc';
+        desc.textContent = cls.description;
+
+        const stats = ui.doc.createElement('span');
+        stats.className = 'class-card__stats';
+        const effective = DATA.effectiveBaseStats(cls);
+        STAT_ROWS.forEach(function (row) {
+          const pill = ui.doc.createElement('span');
+          pill.className = 'stat-pill';
+          const label = ui.doc.createElement('span');
+          label.className = 'stat-pill__label';
+          label.textContent = row.label;
+          const value = ui.doc.createElement('span');
+          value.className = 'stat-pill__value';
+          value.textContent = String(effective[row.key]);
+          pill.appendChild(label);
+          pill.appendChild(value);
+          stats.appendChild(pill);
+        });
+
+        const foot = ui.doc.createElement('span');
+        foot.className = 'class-card__foot';
+        const diffLabel = ui.doc.createElement('span');
+        diffLabel.className = 'diff-label';
+        diffLabel.textContent = 'Difficulty';
+        const pips = ui.doc.createElement('span');
+        pips.className = 'pips';
+        for (let i = 1; i <= 5; i++) {
+          const pip = ui.doc.createElement('span');
+          pip.className = 'pip' + (i <= cls.difficulty ? ' is-on' : '') +
+            (cls.difficulty >= 4 && i <= cls.difficulty ? ' is-hard' : '');
+          pips.appendChild(pip);
+        }
+        foot.appendChild(diffLabel);
+        foot.appendChild(pips);
+
+        body.appendChild(top);
+        body.appendChild(desc);
+        body.appendChild(stats);
+        body.appendChild(foot);
+
+        card.appendChild(art);
+        card.appendChild(body);
+        ui.grid.appendChild(card);
+
+        ui.cards[cls.id] = { card: card, canvas: canvas, ctx: canvas.getContext('2d') };
+      });
+    }
+
+    /** Static idle portrait for each card. */
+    function drawCardPortraits() {
+      DATA.classList().forEach(function (cls) {
+        const entry = ui.cards && ui.cards[cls.id];
+        if (!entry || !entry.ctx) return;
+        const c = entry.ctx;
+        c.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+        Renderer.drawHero(c, {
+          look: cls.look,
+          x: entry.canvas.width / 2,
+          y: entry.canvas.height - 26,
+          scale: 1.55,
+          facing: 1,
+          moving: false,
+          walkPhase: 0,
+          attackAnim: 0,
+          attackKind: cls.attackType === 'ranged' ? 'cast' : 'melee',
+          time: 0.6
+        });
+      });
+    }
+
+    function fillPips(container, difficulty) {
+      container.innerHTML = '';
+      for (let i = 1; i <= 5; i++) {
+        const pip = ui.doc.createElement('span');
+        pip.className = 'pip' + (i <= difficulty ? ' is-on' : '') +
+          (difficulty >= 4 && i <= difficulty ? ' is-hard' : '');
+        container.appendChild(pip);
+      }
+    }
+
+    function bonusText(item) {
+      if (!item || !item.bonus) return '';
+      const parts = [];
+      Object.keys(item.bonus).forEach(function (key) {
+        const value = item.bonus[key];
+        const label = BONUS_LABELS[key] || key;
+        if (key === 'critChance' || key === 'evasion') {
+          parts.push((value > 0 ? '+' : '') + Math.round(value * 100) + '% ' + label);
+        } else {
+          parts.push((value > 0 ? '+' : '') + value + ' ' + label);
+        }
+      });
+      return parts.join('  \u00B7  ');
+    }
+
+    function renderPreview(cls) {
+      const stats = DATA.effectiveBaseStats(cls);
+      const max = statMaxima();
+
+      ui.previewName.textContent = cls.name;
+      ui.previewRole.textContent = cls.role;
+      ui.previewDesc.textContent = cls.description + ' ' + cls.playstyle;
+
+      ui.previewStats.innerHTML = '';
+      STAT_ROWS.forEach(function (row) {
+        const item = ui.doc.createElement('li');
+        item.className = row.className;
+        const label = ui.doc.createElement('span');
+        label.className = 'stat__label';
+        label.textContent = row.label;
+        const value = ui.doc.createElement('span');
+        value.className = 'stat__val';
+        value.textContent = String(stats[row.key]);
+        const bar = ui.doc.createElement('span');
+        bar.className = 'stat__bar';
+        const fill = ui.doc.createElement('i');
+        fill.style.width = Math.round(Utils.clamp(stats[row.key] / max[row.key], 0.05, 1) * 100) + '%';
+        bar.appendChild(fill);
+        item.appendChild(label);
+        item.appendChild(value);
+        item.appendChild(bar);
+        ui.previewStats.appendChild(item);
+      });
+
+      const weapon = DATA.getItem(cls.weaponId);
+      const armor = DATA.getItem(cls.armorId);
+      ui.previewWeapon.textContent = weapon ? weapon.name : '—';
+      ui.previewWeaponBonus.textContent = weapon ? bonusText(weapon) : '';
+      ui.previewArmor.textContent = armor ? armor.name : '—';
+      ui.previewArmorBonus.textContent = armor ? bonusText(armor) : '';
+
+      ui.previewSkills.innerHTML = '';
+      (cls.skillIds || []).forEach(function (id) {
+        const skill = DATA.getSkill(id);
+        if (!skill) return;
+        const item = ui.doc.createElement('li');
+
+        const glyph = ui.doc.createElement('span');
+        glyph.className = 'skill__glyph';
+        glyph.textContent = skill.glyph || '\u25C6';
+
+        const body = ui.doc.createElement('span');
+        const name = ui.doc.createElement('span');
+        name.className = 'skill__name';
+        name.textContent = skill.name;
+        const desc = ui.doc.createElement('span');
+        desc.className = 'skill__desc';
+        desc.textContent = skill.description;
+        const meta = ui.doc.createElement('span');
+        meta.className = 'skill__meta';
+        const rageCost = skill.params && skill.params.rageCost;
+        meta.textContent = rageCost ? (rageCost + ' RAGE') : (skill.mp > 0 ? (skill.mp + ' MP') : 'No cost');
+        const cd = ui.doc.createElement('span');
+        cd.className = 'skill__cd';
+        cd.textContent = (skill.cooldownMs / 1000).toFixed(1) + 's cooldown';
+        meta.appendChild(cd);
+
+        body.appendChild(name);
+        body.appendChild(desc);
+        body.appendChild(meta);
+
+        item.appendChild(glyph);
+        item.appendChild(body);
+        ui.previewSkills.appendChild(item);
+      });
+
+      fillPips(ui.previewDifficulty, cls.difficulty);
+      ui.previewDifficulty.setAttribute('aria-label', 'Difficulty ' + cls.difficulty + ' of 5');
+      if (ui.previewGlow) {
+        ui.previewGlow.style.background = 'radial-gradient(circle, ' +
+          Utils.rgba(cls.look.accent || '#f2c14e', 0.55) + ', rgba(0,0,0,0) 70%)';
+      }
+    }
+
+    /* ---------- preview animation ---------- */
+    function drawPreviewFrame(timestamp) {
+      const cls = DATA.getClass(selectedId);
+      if (!cls || !ui.previewCtx) return;
+      const c = ui.previewCtx;
+      const w = ui.previewCanvas.width;
+      const h = ui.previewCanvas.height;
+      const time = (timestamp || 0) / 1000;
+
+      c.clearRect(0, 0, w, h);
+
+      // emblem watermark
+      c.save();
+      c.globalAlpha = 0.09;
+      c.fillStyle = '#ffffff';
+      c.font = '700 190px "Palatino Linotype", Georgia, serif';
+      c.textAlign = 'center';
+      c.fillText(cls.emblem, w / 2, h / 2 + 62);
+      c.restore();
+
+      // ground glow
+      const glow = c.createRadialGradient(w / 2, h - 54, 6, w / 2, h - 54, 130);
+      glow.addColorStop(0, Utils.rgba(cls.look.accent || '#f2c14e', 0.34));
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = glow;
+      c.fillRect(0, 0, w, h);
+
+      c.strokeStyle = Utils.rgba(cls.look.accent || '#f2c14e', 0.4);
+      c.lineWidth = 2;
+      c.beginPath();
+      c.ellipse(w / 2, h - 50, 92, 24, 0, 0, Math.PI * 2);
+      c.stroke();
+
+      // idle, with a swing every few seconds
+      const cycle = time % 3.2;
+      const attackAnim = cycle < 0.55 ? 1 - cycle / 0.55 : 0;
+
+      Renderer.drawHero(c, {
+        look: cls.look,
+        x: w / 2,
+        y: h - 48,
+        scale: 3.4,
+        facing: 1,
+        walkPhase: 0,
+        moving: false,
+        attackAnim: attackAnim,
+        attackKind: cls.attackType === 'ranged' ? 'cast' : 'melee',
+        time: time
+      });
+    }
+
+    function startLoop() {
+      if (loopRunning || !root.requestAnimationFrame) return;
+      loopRunning = true;
+      const step = function (timestamp) {
+        if (!loopRunning) return;
+        drawPreviewFrame(timestamp);
+        rafId = root.requestAnimationFrame(step);
+      };
+      rafId = root.requestAnimationFrame(step);
+    }
+
+    function stopLoop() {
+      loopRunning = false;
+      if (rafId && root.cancelAnimationFrame) root.cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+
+    /* ---------- selection ---------- */
+    function select(classId, options) {
+      const cls = DATA.getClass(classId);
+      if (!cls) return;
+      const opts = options || {};
+      const changed = selectedId !== cls.id;
+      selectedId = cls.id;
+
+      Object.keys(ui.cards || {}).forEach(function (id) {
+        const entry = ui.cards[id];
+        const on = id === cls.id;
+        entry.card.classList.toggle('is-selected', on);
+        entry.card.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+
+      renderPreview(cls);
+      drawPreviewFrame(root.performance ? root.performance.now() : 0);
+      if (opts.openSheet) openSheet();
+      if (changed) Game.emit('classSelected', { classId: cls.id, classDef: cls });
+      return cls;
+    }
+
+    function selectedClass() { return DATA.getClass(selectedId); }
+
+    /* ---------- mobile bottom sheet ---------- */
+    function openSheet() {
+      if (ui.preview && isCompact()) ui.preview.classList.add('is-open');
+    }
+
+    function closeSheet() {
+      if (ui.preview) ui.preview.classList.remove('is-open');
+    }
+
+    function isCompact() {
+      return !!(root.matchMedia && root.matchMedia('(max-width: 900px)').matches);
+    }
+
+    /* ---------- screens ---------- */
+    function open() {
+      Game.setScreen('select');
+      closeSheet();
+      if (ui.nameInput && Game.state.player) ui.nameInput.value = Game.state.player.name;
+      select(selectedId || (Game.state.player && Game.state.player.classId) || DATA.DEFAULT_CLASS);
+      startLoop();
+    }
+
+    function confirm() {
+      const name = sanitizeName(ui.nameInput ? ui.nameInput.value : '');
+      const player = Game.createCharacter({ classId: selectedId, name: name });
+      if (ui.nameInput) ui.nameInput.value = player.name;
+      closeSheet();
+      stopLoop();
+      Game.setScreen('game');
+      return player;
+    }
+
+    function back() {
+      closeSheet();
+      stopLoop();
+      Game.setScreen('game');        // keep playing with the current character
+      return Game.state.player;
+    }
+
+    function sanitizeName(raw) {
+      const value = (raw === undefined || raw === null ? '' : String(raw))
+        .replace(/[<>&"'`\\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 14);
+      return value || PLAYER_DEF.name;
+    }
+
+    /* ---------- wiring ---------- */
+    function bindEvents() {
+      if (ui.grid) {
+        ui.grid.addEventListener('click', function (event) {
+          const card = event.target && event.target.closest ? event.target.closest('[data-class]') : null;
+          if (!card) return;
+          select(card.getAttribute('data-class'), { openSheet: true });
+        });
+      }
+
+      if (ui.createButton) ui.createButton.addEventListener('click', confirm);
+      if (ui.backButton) ui.backButton.addEventListener('click', back);
+      if (ui.collapseButton) ui.collapseButton.addEventListener('click', closeSheet);
+      if (ui.backdrop) ui.backdrop.addEventListener('click', closeSheet);
+
+      if (ui.nameInput) {
+        ui.nameInput.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter') { confirm(); event.preventDefault(); }
+        });
+        ui.nameInput.addEventListener('focus', function () { ui.nameInput.select(); });
+      }
+
+      // Arrow keys walk through the class list while the screen is open.
+      ui.doc.addEventListener('keydown', function (event) {
+        if (Game.state.screen !== 'select') return;
+        if (ui.nameInput && event.target === ui.nameInput) return;
+        const steps = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+        const step = steps[event.code];
+        if (step === undefined) return;
+        const list = DATA.classList();
+        const index = list.findIndex(function (cls) { return cls.id === selectedId; });
+        const next = list[(index + step + list.length) % list.length];
+        select(next.id);
+        if (ui.cards[next.id]) ui.cards[next.id].card.focus();
+        if (event.cancelable) event.preventDefault();
+      });
+    }
+
+    function init(doc, saved) {
+      ui.doc = doc;
+      ui.grid = doc.getElementById('class-grid');
+      ui.preview = doc.getElementById('preview');
+      ui.previewCanvas = doc.getElementById('preview-canvas');
+      ui.previewCtx = ui.previewCanvas ? ui.previewCanvas.getContext('2d') : null;
+      ui.previewName = doc.getElementById('preview-name');
+      ui.previewRole = doc.getElementById('preview-role');
+      ui.previewDesc = doc.getElementById('preview-desc');
+      ui.previewStats = doc.getElementById('preview-stats');
+      ui.previewWeapon = doc.getElementById('preview-weapon');
+      ui.previewWeaponBonus = doc.getElementById('preview-weapon-bonus');
+      ui.previewArmor = doc.getElementById('preview-armor');
+      ui.previewArmorBonus = doc.getElementById('preview-armor-bonus');
+      ui.previewSkills = doc.getElementById('preview-skills');
+      ui.previewDifficulty = doc.getElementById('preview-difficulty');
+      ui.previewGlow = doc.getElementById('preview-glow');
+      ui.createButton = doc.getElementById('create-character');
+      ui.backButton = doc.getElementById('back-button');
+      ui.collapseButton = doc.getElementById('preview-collapse');
+      ui.backdrop = doc.getElementById('preview-backdrop');
+      ui.nameInput = doc.getElementById('char-name');
+
+      buildCards();
+      drawCardPortraits();
+      bindEvents();
+
+      const initial = (saved && DATA.getClass(saved.classId)) ? saved.classId : DATA.DEFAULT_CLASS;
+      if (ui.nameInput) ui.nameInput.value = (saved && saved.name) || PLAYER_DEF.name;
+      select(initial);
+      return ui;
+    }
+
+    return {
+      init: init,
+      open: open,
+      closeSheet: closeSheet,
+      select: select,
+      confirm: confirm,
+      back: back,
+      selectedClass: selectedClass,
+      sanitizeName: sanitizeName,
+      ui: ui,
+      isOpen: function () { return loopRunning; }
+    };
+  })();
+
+  /* ============================================================
    * 9. GAME — state, loop and rules
    * ========================================================== */
   const Game = (function () {
     const state = {
       running: false,
       paused: false,
+      screen: 'select',      // 'select' | 'game'
       time: 0,
       player: null,
-      monster: null,
+      monster: null,         // primary target (nearest alive monster)
+      monsters: [],          // every monster in the zone
+      character: null,       // { classId, name }
       rafId: 0,
       lastTimestamp: 0,
       systems: [],          // extra update systems registered by later modules
@@ -1209,10 +2605,83 @@
     }
 
     /* ---------- setup ---------- */
-    function create() {
-      state.player = createPlayer();
-      state.monster = createMonster(MONSTER_DEF, ZONE);
-      state.time = 0;
+    /** Build the monster population for the active zone. */
+    function createMonsters() {
+      state.monsters = (ZONE.monsters || []).map(function (id) {
+        return createMonster(DATA.MONSTERS[id] || MONSTER_DEF, ZONE);
+      });
+      state.monster = state.monsters[0] || null;
+      return state.monsters;
+    }
+
+    /**
+     * Create (or replace) the player character from a class definition.
+     * Starting stats, gear and skills all come from data.js.
+     */
+    function createCharacter(options) {
+      const opts = options || {};
+      const classDef = DATA.getClass(opts.classId) || DATA.getClass(DATA.DEFAULT_CLASS);
+      const name = (opts.name && String(opts.name).trim()) || PLAYER_DEF.name;
+
+      state.character = { classId: classDef.id, name: name };
+      state.player = createPlayer(classDef.id, name);
+      Projectiles.clear();
+      createMonsters();
+      Effects.reset();
+
+      if (HUD.el.skillBar) HUD.buildSkillBar(state.player);
+      HUD.render(state);
+
+      Log.push(state.player.name + ' the ' + classDef.name + ' enters ' + ZONE.name + '.', 'log--level');
+      Log.push('Equipped ' + (state.player.weapon ? state.player.weapon.name : 'nothing') +
+        ' and ' + (state.player.armor ? state.player.armor.name : 'nothing') + '.', null);
+      if (state.monster) Log.push('A wild ' + state.monster.name + ' blocks the path.', null);
+
+      saveCharacter();
+      emit('characterCreated', { player: state.player, classDef: classDef, name: state.player.name });
+      return state.player;
+    }
+
+    /* ---------- persistence ---------- */
+    function saveCharacter() {
+      try {
+        if (!root.localStorage || !state.character) return false;
+        root.localStorage.setItem(CONFIG.storage.saveKey, JSON.stringify({
+          classId: state.character.classId,
+          name: state.character.name,
+          savedAt: Date.now()
+        }));
+        return true;
+      } catch (err) {
+        return false;   // private mode / storage disabled — the game still works
+      }
+    }
+
+    function loadSavedCharacter() {
+      try {
+        if (!root.localStorage) return null;
+        const raw = root.localStorage.getItem(CONFIG.storage.saveKey);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !DATA.getClass(parsed.classId)) return null;
+        return { classId: parsed.classId, name: parsed.name || PLAYER_DEF.name };
+      } catch (err) {
+        return null;
+      }
+    }
+
+    /** Switch between the character-select screen and the game. */
+    function setScreen(name) {
+      state.screen = name;
+      const doc = root.document;
+      if (doc) {
+        const gameScreen = doc.getElementById('screen-game');
+        const selectScreen = doc.getElementById('screen-select');
+        if (gameScreen) gameScreen.classList.toggle('is-hidden', name !== 'game');
+        if (selectScreen) selectScreen.classList.toggle('is-hidden', name === 'game');
+      }
+      if (name === 'game') Renderer.resize();
+      emit('screenChange', { screen: name });
     }
 
     function init(options) {
@@ -1225,23 +2694,50 @@
 
       Input.bindKeyboard(root);
       Input.bindControls(doc, doc.getElementById('game-canvas'));
+      bindSkillControls(doc);
 
-      state.player = null;
-      state.monster = null;
-      create();
       Effects.reset();
       Log.clear();
-
       HUD.setZone(ZONE.name);
-      Log.push('Welcome to ' + ZONE.name + ', ' + state.player.name + '!', null);
-      Log.push('A wild ' + state.monster.name + ' blocks the path.', null);
+
+      // The game is always backed by a valid character; the select screen sits on top.
+      const saved = loadSavedCharacter();
+      createCharacter(saved || { classId: DATA.DEFAULT_CLASS, name: PLAYER_DEF.name });
 
       bindTouchToggle(doc);
       bindVisibilityPause(doc);
 
+      CharacterSelect.init(doc, saved);
+      setScreen(opts.screen || 'select');
+
       emit('ready', state);
       if (opts.autoStart !== false) start();
       return state;
+    }
+
+    /** Skill bar clicks + 1/2/3 hotkeys. */
+    function bindSkillControls(doc) {
+      const bar = doc.getElementById('skill-bar');
+      if (bar && bar.addEventListener) {
+        bar.addEventListener('click', function (event) {
+          const button = event.target && event.target.closest ? event.target.closest('[data-skill-slot]') : null;
+          if (!button) return;
+          castSkill(parseInt(button.getAttribute('data-skill-slot'), 10));
+        });
+      }
+
+      const hotkeys = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 };
+      doc.addEventListener('keydown', function (event) {
+        if (hotkeys[event.code] === undefined) return;
+        if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName || '')) return;
+        castSkill(hotkeys[event.code]);
+        if (event.cancelable) event.preventDefault();
+      });
+
+      const changeButton = doc.getElementById('change-class');
+      if (changeButton) {
+        changeButton.addEventListener('click', function () { CharacterSelect.open(); });
+      }
     }
 
     function bindTouchToggle(doc) {
@@ -1309,6 +2805,7 @@
       if (!state.player) return;
       const clamped = Utils.clamp(dt, 0, CONFIG.loop.maxDeltaSeconds);
       state.time += clamped;
+      if (state.screen !== 'game') return;      // paused behind the character-select screen
       update(clamped);
       Renderer.render(state);
       HUD.render(state);
@@ -1316,10 +2813,11 @@
 
     function update(dt) {
       const player = state.player;
-      const monster = state.monster;
 
       updatePlayer(player, dt);
-      updateMonster(monster, dt);
+      updateMonsters(dt);
+      updateProjectiles(dt);
+      Skills.tick(player, dt);
       updateRegen(player, dt);
       Effects.update(dt);
 
@@ -1354,11 +2852,11 @@
       }
 
       clampToWorld(player);
-      separateFromMonster(player, state.monster);
+      separateFromMonster(player, nearestMonster(player.pos.x, player.pos.y, 60));
 
-      // Attack (queued tap or held button, respecting cooldown)
+      // Basic attack (queued tap or held button, respecting the class cooldown)
       if ((Input.consumeAttack() || Input.isAttackHeld()) && player.attackCooldown <= 0) {
-        playerAttack(player, state.monster);
+        playerBasicAttack(player);
       }
     }
 
@@ -1385,60 +2883,408 @@
     function updateRegen(player, dt) {
       if (player.downed) return;
       if (player.hurtTimer <= 0) {
-        player.hp = Math.min(player.maxHp, player.hp + PLAYER_DEF.hpRegenPerSecond * dt);
+        player.hp = Math.min(player.maxHp, player.hp + (player.hpRegenPerSecond || 0) * dt);
       }
-      player.mp = Math.min(player.maxMp, player.mp + PLAYER_DEF.mpRegenPerSecond * dt);
+      player.mp = Math.min(player.maxMp, player.mp + (player.mpRegenPerSecond || 0) * dt);
+    }
+
+    /** Nearest alive monster to a point (optionally within a max distance). */
+    function nearestMonster(x, y, maxDistance) {
+      let best = null;
+      let bestDistance = maxDistance === undefined ? Infinity : maxDistance;
+      (state.monsters || []).forEach(function (monster) {
+        if (!monster.alive) return;
+        const distance = Utils.distance(x, y, monster.pos.x, monster.pos.y);
+        if (distance < bestDistance) { bestDistance = distance; best = monster; }
+      });
+      return best;
+    }
+
+    /** All monsters within `radius` of a point. */
+    function monstersNear(x, y, radius) {
+      return (state.monsters || []).filter(function (monster) {
+        return monster.alive && Utils.distance(x, y, monster.pos.x, monster.pos.y) <= radius + monster.radius;
+      });
     }
 
     /* ---------- attacks ---------- */
-    function playerAttack(player, monster) {
-      // Magic numbers live in data.js so future classes can override them.
-      player.attackCooldown = PLAYER_DEF.attackCooldownMs;
+    /** Basic attack: melee classes swing, ranged classes loose a projectile. */
+    function playerBasicAttack(player) {
+      player.attackCooldown = player.attackCooldownMs;
       player.attackAnim = 1;
-      emit('playerAttack', { player: player, monster: monster });
+      player.attackKind = player.attackType;
+      emit('playerAttack', { player: player });
 
-      if (!monster || !monster.alive) {
-        Effects.addFloater(player.pos.x, player.pos.y - 64, 'Nothing here...', { color: '#c9c4e6', size: 12 });
+      if (player.attackType === 'ranged') rangedBasicAttack(player);
+      else meleeBasicAttack(player);
+    }
+
+    function stealthedCrit(player) {
+      return Skills.isStealthed(player);   // attacks from stealth always crit
+    }
+
+    function meleeBasicAttack(player) {
+      const target = nearestMonster(player.pos.x, player.pos.y, player.attackRange + player.radius + 60);
+      if (!target || !Combat.inRange(player, target, player.attackRange)) {
+        // report "Too far!" whenever a monster exists, even if it is way out of reach
+        showAttackFeedback(player, nearestMonster(player.pos.x, player.pos.y, Infinity));
         return;
       }
+      hitMonster(player, target, {
+        statKey: 'attack',
+        multiplier: 1,
+        alwaysCrit: stealthedCrit(player),
+        apply: Skills.attackPoison(player),
+        label: 'basic'
+      });
+    }
 
-      if (!Combat.inRange(player, monster, PLAYER_DEF.attackRange)) {
-        Effects.addFloater(player.pos.x + player.facing.x * 22, player.pos.y - 64, 'Too far!', {
+    function rangedBasicAttack(player) {
+      const def = DATA.PROJECTILES[(player.classDef && player.classDef.basicProjectile) || 'arrow'];
+      if (!def) return;
+      const target = nearestMonster(player.pos.x, player.pos.y, player.autoTargetRange || 99999);
+      const angle = target
+        ? Math.atan2(target.pos.y - player.pos.y, target.pos.x - player.pos.x)
+        : Math.atan2(player.facing.y, player.facing.x);
+      fireProjectile(player, def, angle, { multiplier: def.damageMultiplier || 1 });
+    }
+
+    function showAttackFeedback(player, target) {
+      if (target) {
+        Effects.addFloater(player.pos.x + (player.facing.x || 1) * 22, player.pos.y - 64, 'Too far!', {
           color: '#e6e1ff', size: 12, life: 620
         });
-        return;
+      } else {
+        Effects.addFloater(player.pos.x, player.pos.y - 64, 'Nothing here...', { color: '#c9c4e6', size: 12 });
       }
+    }
 
-      const result = Combat.rollDamage(player, monster);
+    /** Spawn a projectile from the player, carrying its damage payload. */
+    function fireProjectile(player, def, angle, options) {
+      const opts = options || {};
+      const mods = Skills.aggregateMods(player);
+      const payload = {
+        multiplier: opts.multiplier !== undefined ? opts.multiplier : (def.damageMultiplier || 1),
+        statKey: def.stat || 'attack',
+        critChance: player.critChance + (opts.critBonus || 0),
+        critMultiplier: player.critMultiplier,
+        alwaysCrit: stealthedCrit(player),
+        apply: def.apply || null,
+        poison: Skills.attackPoison(player),
+        explodeRadius: def.explodeRadius || 0,
+        strong: !!opts.strong,
+        mods: mods
+      };
+
+      const originX = player.pos.x + Math.cos(angle) * (player.radius + 6);
+      const originY = player.pos.y - 8 + Math.sin(angle) * (player.radius + 6);
+      Projectiles.spawn(def, originX, originY, angle, payload);
+      Effects.burst(originX, originY, def.color, 4, { speedMax: 70, gravity: 40 });
+    }
+
+    /**
+     * Apply damage from `attacker` to a monster: rolls, floaters, particles,
+     * status effects, rage gain, death handling. Used by melee, projectiles and skills.
+     */
+    function hitMonster(attacker, monster, options) {
+      if (!monster || !monster.alive) return null;
+      const opts = options || {};
+
+      const result = Combat.rollDamage(attacker, monster, {
+        statKey: opts.statKey || 'attack',
+        multiplier: opts.multiplier || 1,
+        critChance: opts.critChance,
+        critMultiplier: opts.critMultiplier,
+        alwaysCrit: opts.alwaysCrit,
+        ignoreDefense: opts.ignoreDefense,
+        bonusPct: opts.bonusPct
+      });
+
       monster.hp = Math.max(0, monster.hp - result.damage);
       monster.hitFlash = 1;
       monster.aggro = true;
 
-      const dx = monster.pos.x - player.pos.x;
-      const dy = monster.pos.y - player.pos.y;
-      const len = Math.hypot(dx, dy) || 1;
-      monster.pos.x += (dx / len) * 6;
-      monster.pos.y += (dy / len) * 6;
-      clampToWorld(monster);
-
+      const source = opts.source || 'player';
+      const color = result.crit ? '#ffd76a' : (opts.color || '#ffffff');
       Effects.addFloater(monster.pos.x, monster.pos.y - 62, result.damage, {
-        color: result.crit ? '#ffd76a' : '#ffffff',
-        size: result.crit ? 26 : 19
+        color: color, size: result.crit ? 26 : 19
       });
       if (result.crit) {
         Effects.addFloater(monster.pos.x, monster.pos.y - 86, 'CRIT!', { color: '#ffca3a', size: 14, life: 700 });
         Effects.burst(monster.pos.x, monster.pos.y - 6, '#ffe9a8', 14, { speedMin: 70, speedMax: 220 });
       }
-      Effects.burst(monster.pos.x, monster.pos.y, '#b8f5c0', result.crit ? 12 : 7);
-      Effects.addShake(result.crit ? 5 : 2.4);
+      Effects.burst(monster.pos.x, monster.pos.y, opts.particleColor || '#b8f5c0', result.crit ? 12 : 7);
+      Effects.addShake(opts.shake !== undefined ? opts.shake : (result.crit ? 5 : 2.4));
 
-      Log.push(player.name + ' hits ' + monster.name + ' for ' + result.damage + (result.crit ? ' (critical)!' : ' damage.'),
-        'log--hit');
+      const statusPayload = mergeStatusPayloads(opts.apply, opts.poison);
+      if (statusPayload) {
+        Statuses.apply(monster, statusPayload, attacker, Skills.aggregateMods(attacker));
+      }
 
-      if (monster.hp <= 0) killMonster(monster);
+      if (attacker && attacker.kind === 'player') Skills.addRage(attacker, 6);
+
+      const verb = opts.label === 'skill' ? 'blasts' : (opts.label === 'spell' ? 'hits' : 'hits');
+      if (!opts.silent) {
+        Log.push(attacker.name + ' ' + verb + ' ' + monster.name + ' for ' + result.damage +
+          (result.crit ? ' (critical)!' : ' damage.'), 'log--hit');
+      }
+
+      if (monster.hp <= 0) killMonster(monster, attacker);
+      return result;
     }
 
-    function killMonster(monster) {
+    function mergeStatusPayloads(a, b) {
+      if (!a && !b) return null;
+      if (!a) return b;
+      if (!b) return a;
+      return {
+        burn: a.burn || b.burn || null,
+        poison: a.poison || b.poison || null,
+        slow: a.slow || b.slow || null,
+        freezeMs: a.freezeMs || b.freezeMs || 0,
+        stunMs: a.stunMs || b.stunMs || 0
+      };
+    }
+
+    /* ---------- skills ---------- */
+    function castSkill(slot) {
+      const player = state.player;
+      if (!player || player.downed) return false;
+      const skill = typeof slot === 'number' ? (player.skills || [])[slot] : DATA.getSkill(slot);
+      if (!skill) return false;
+
+      const check = Skills.canCast(player, skill);
+      if (!check.ok) {
+        notifySkillBlocked(player, skill, check.reason);
+        return false;
+      }
+
+      const target = nearestMonster(player.pos.x, player.pos.y, 520);
+      const needsTarget = skill.kind === 'meleeStrike' || skill.kind === 'inflict';
+      if (needsTarget && (!target || !Combat.inRange(player, target, player.attackRange + 24))) {
+        Effects.addFloater(player.pos.x, player.pos.y - 64, 'No target in range', { color: '#e6e1ff', size: 12, life: 700 });
+        return false;
+      }
+
+      const started = Skills.beginCast(player, skill);
+      if (!started.ok) return false;
+
+      player.attackAnim = 1;
+      player.attackKind = 'cast';
+      applySkillEffect(player, skill, target);
+      Log.push(player.name + ' uses ' + skill.name + '.', 'log--level');
+      emit('skillCast', { player: player, skill: skill, target: target });
+      return true;
+    }
+
+    function notifySkillBlocked(player, skill, reason) {
+      const messages = {
+        cooldown: 'Not ready yet',
+        mana: 'Not enough MP',
+        rage: 'Not enough rage',
+        downed: 'You are down'
+      };
+      const text = messages[reason] || 'Cannot cast';
+      Effects.addFloater(player.pos.x, player.pos.y - 70, text, { color: '#ffb3a0', size: 12, life: 700 });
+    }
+
+    function applySkillEffect(player, skill, target) {
+      const params = skill.params || {};
+      const mods = Skills.aggregateMods(player);
+      const magic = player.magic >= player.attack ? 'magic' : 'attack';
+
+      switch (skill.kind) {
+        case 'meleeStrike': {
+          const healPct = params.selfHealPct;
+          hitMonster(player, target, {
+            statKey: magic,
+            multiplier: params.multiplier || 1.5,
+            alwaysCrit: params.alwaysCrit || stealthedCrit(player),
+            apply: params.apply || null,
+            label: 'skill',
+            particleColor: '#ffd9a0'
+          });
+          if (healPct) healPlayer(player, player.maxHp * healPct, '#b8f5c0');
+          break;
+        }
+
+        case 'aoeSelf': {
+          const radius = params.radius || 100;
+          const victims = monstersNear(player.pos.x, player.pos.y, radius);
+          Effects.burst(player.pos.x, player.pos.y - 6, params.color || '#ffb347', 26, { speedMax: 240, lift: 40 });
+          Effects.addShake(params.shake || 5);
+          if (!victims.length) {
+            Effects.addFloater(player.pos.x, player.pos.y - 64, 'No enemies in range', { color: '#e6e1ff', size: 12, life: 700 });
+          }
+          victims.forEach(function (monster) {
+            hitMonster(player, monster, {
+              statKey: magic,
+              multiplier: params.multiplier || 1.2,
+              apply: params.apply || null,
+              label: 'skill',
+              silent: victims.length > 1,
+              particleColor: params.color || '#ffb347',
+              shake: 0
+            });
+          });
+          break;
+        }
+
+        case 'projectile': {
+          const def = DATA.PROJECTILES[params.projectile] || DATA.PROJECTILES.arrow;
+          const count = params.count || 1;
+          const spread = params.spread || 0;
+          const baseAngle = target
+            ? Math.atan2(target.pos.y - player.pos.y, target.pos.x - player.pos.x)
+            : Math.atan2(player.facing.y, player.facing.x);
+          for (let i = 0; i < count; i++) {
+            const offset = count === 1 ? 0 : (i - (count - 1) / 2) * spread;
+            fireProjectile(player, def, baseAngle + offset, {
+              multiplier: params.multiplier || def.damageMultiplier || 1,
+              strong: true
+            });
+          }
+          break;
+        }
+
+        case 'heal': {
+          healPlayer(player, player.maxHp * (params.percent || 0.3), '#b8f5c0');
+          break;
+        }
+
+        case 'buff': {
+          Skills.addBuff(player, skill.id, skill.name, params.mods, params.durationMs, {
+            regenPerSecond: params.regenPerSecond || 0,
+            poisonOnHit: params.poisonOnHit || null,
+            stealthCrit: params.stealthCrit || 0
+          });
+          Effects.burst(player.pos.x, player.pos.y - 10, '#cbb2ff', 18, { speedMax: 120, lift: 70 });
+          Effects.addFloater(player.pos.x, player.pos.y - 68, skill.name + '!', { color: '#cbb2ff', size: 14, life: 900 });
+          break;
+        }
+
+        case 'stealth': {
+          player.stealthMs = params.durationMs || 3000;
+          Skills.addBuff(player, skill.id, skill.name, { speedPct: params.speedPct || 0 }, params.durationMs || 3000, {
+            stealthCrit: params.critChance || 0
+          });
+          (state.monsters || []).forEach(function (monster) { monster.aggro = false; });
+          Effects.burst(player.pos.x, player.pos.y - 8, '#9aa6c4', 22, { speedMax: 110, lift: 30 });
+          Effects.addFloater(player.pos.x, player.pos.y - 68, 'Hidden!', { color: '#bfd0ff', size: 14, life: 900 });
+          break;
+        }
+
+        case 'dash': {
+          const angle = target
+            ? Math.atan2(target.pos.y - player.pos.y, target.pos.x - player.pos.x)
+            : Math.atan2(player.facing.y, player.facing.x);
+          let distance = params.distance || 150;
+          if (target) {
+            const gap = Utils.distance(player.pos.x, player.pos.y, target.pos.x, target.pos.y) -
+              (player.radius + target.radius);
+            distance = Math.min(distance, Math.max(0, gap));
+          }
+          const fromX = player.pos.x, fromY = player.pos.y;
+          player.pos.x += Math.cos(angle) * distance;
+          player.pos.y += Math.sin(angle) * distance;
+          player.facing.x = Math.cos(angle);
+          player.facing.y = Math.sin(angle);
+          clampToWorld(player);
+          Effects.burst(fromX, fromY - 8, '#cfe0ff', 14, { speedMax: 90, lift: 20 });
+          Effects.burst(player.pos.x, player.pos.y - 8, '#cfe0ff', 14, { speedMax: 90, lift: 20 });
+          if (params.multiplier > 0 && target && Combat.inRange(player, target, player.attackRange + 12)) {
+            hitMonster(player, target, {
+              statKey: 'attack',
+              multiplier: params.multiplier,
+              label: 'skill',
+              particleColor: '#ffd0a0',
+              shake: 5
+            });
+          }
+          break;
+        }
+
+        case 'inflict': {
+          hitMonster(player, target, {
+            statKey: 'magic',
+            multiplier: params.multiplier || 1,
+            apply: {
+              freezeMs: params.freezeMs || 0,
+              slow: params.slow || null,
+              burn: params.burn || null
+            },
+            label: 'spell',
+            color: '#bfefff',
+            particleColor: '#bfefff',
+            shake: 4
+          });
+          break;
+        }
+
+        default:
+          break;
+      }
+    }
+
+    function healPlayer(player, amount, color) {
+      const mods = Skills.aggregateMods(player);
+      const healed = Math.max(1, Math.round(amount * (1 + (mods.healingBonus || 0))));
+      const before = player.hp;
+      player.hp = Math.min(player.maxHp, player.hp + healed);
+      const actual = Math.round(player.hp - before);
+      Effects.addFloater(player.pos.x, player.pos.y - 64, '+' + actual, { color: color || '#b8f5c0', size: 18 });
+      Effects.burst(player.pos.x, player.pos.y - 8, color || '#b8f5c0', 16, { speedMax: 110, lift: 70, gravity: -30 });
+      emit('playerHealed', { player: player, amount: actual });
+      return actual;
+    }
+
+    /* ---------- projectiles ---------- */
+    function updateProjectiles(dt) {
+      Projectiles.update(dt, {
+        monsters: function () { return state.monsters || []; },
+        onHit: function (projectile, monster) {
+          const payload = projectile.payload || {};
+          const player = state.player;
+
+          hitMonster(player, monster, {
+            statKey: payload.statKey || 'attack',
+            multiplier: payload.multiplier || 1,
+            critChance: payload.critChance,
+            critMultiplier: payload.critMultiplier,
+            alwaysCrit: payload.alwaysCrit,
+            apply: mergeStatusPayloads(payload.apply, payload.poison),
+            label: 'spell',
+            color: projectile.def.color,
+            particleColor: projectile.def.trail || projectile.def.color,
+            shake: projectile.def.shake || 2.4
+          });
+
+          // area burst (Fireball)
+          if (payload.explodeRadius) {
+            Effects.burst(projectile.x, projectile.y, '#ffb347', 26, { speedMax: 240, lift: 60 });
+            Effects.addShake(4);
+            monstersNear(projectile.x, projectile.y, payload.explodeRadius).forEach(function (other) {
+              if (other === monster) return;
+              hitMonster(player, other, {
+                statKey: payload.statKey || 'attack',
+                multiplier: (payload.multiplier || 1) * 0.7,
+                apply: payload.apply,
+                label: 'spell',
+                silent: true,
+                particleColor: '#ffb347'
+              });
+            });
+          }
+        },
+        onExpire: function (projectile) {
+          Effects.burst(projectile.x, projectile.y, projectile.def.trail || projectile.def.color, 4, {
+            speedMax: 60, sizeMin: 1, sizeMax: 3, gravity: 20
+          });
+        }
+      });
+    }
+
+    function killMonster(monster, attacker) {
       monster.alive = false;
       monster.aggro = false;
       monster.deathTimer = 0.4;
@@ -1455,6 +3301,8 @@
       state.player.kills += 1;
       state.player.gold += goldGain;
       state.player.exp += expGain;
+      if (attacker && attacker.kind === 'player') Skills.addRage(attacker, 12);
+      Statuses.clear(monster);
 
       Effects.addFloater(monster.pos.x - 30, monster.pos.y - 70, '+' + expGain + ' EXP', {
         color: '#c4a7ff', size: 15, life: 1200, vy: -30, vx: -6
@@ -1469,6 +3317,13 @@
     }
 
     /* ---------- monster AI ---------- */
+    function updateMonsters(dt) {
+      (state.monsters || []).forEach(function (monster) { updateMonster(monster, dt); });
+      // primary target for the HUD: nearest alive monster, else the first one
+      state.monster = nearestMonster(state.player.pos.x, state.player.pos.y, Infinity) ||
+        (state.monsters || [])[0] || null;
+    }
+
     function updateMonster(monster, dt) {
       if (!monster) return;
 
@@ -1484,16 +3339,38 @@
       monster.spawnPulse = Math.max(0, monster.spawnPulse - dt * 2);
 
       const player = state.player;
+
+      // damage-over-time (burn / poison) ticks
+      const dotDamage = Statuses.update(monster, dt);
+      if (dotDamage > 0) {
+        monster.hp = Math.max(0, monster.hp - dotDamage);
+        Effects.addFloater(monster.pos.x + Utils.randRange(-8, 8), monster.pos.y - 52,
+          '-' + Math.max(1, Math.round(dotDamage)), {
+            color: monster.status && monster.status.poison ? '#9be36a' : '#ff9b4a',
+            size: 14, life: 650, vy: -22
+          });
+        if (monster.hp <= 0) { killMonster(monster, player); return; }
+      }
+
+      // frozen / stunned monsters skip their turn entirely
+      if (Statuses.isIncapacitated(monster)) {
+        monster.aggro = true;
+        clampToWorld(monster);
+        return;
+      }
+
+      const speedMultiplier = Statuses.speedMultiplier(monster);
+      const hidden = Skills.isStealthed(player);
       const distanceToPlayer = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
 
-      if (player.downed || distanceToPlayer > monster.def.aggroRange) {
+      if (player.downed || hidden || distanceToPlayer > monster.def.aggroRange) {
         monster.aggro = false;
-        wander(monster, dt);
+        wander(monster, dt, speedMultiplier);
       } else {
         monster.aggro = true;
         const reach = monster.radius + player.radius + monster.def.attackRange;
         if (distanceToPlayer > reach) {
-          moveToward(monster, player.pos.x, player.pos.y, monster.speed * dt);
+          moveToward(monster, player.pos.x, player.pos.y, monster.speed * speedMultiplier * dt);
         } else if (monster.attackCooldown <= 0) {
           monsterAttack(monster, player);
         }
@@ -1502,7 +3379,7 @@
       clampToWorld(monster);
     }
 
-    function wander(monster, dt) {
+    function wander(monster, dt, speedMultiplier) {
       monster.wanderTimer -= dt;
       if (monster.wanderTimer <= 0) {
         monster.wanderTimer = Utils.randRange(1.1, 2.8);
@@ -1518,7 +3395,7 @@
       const dy = monster.wanderTarget.y - monster.pos.y;
       const dist = Math.hypot(dx, dy);
       if (dist > 4) {
-        const step = monster.speed * 0.45 * dt;
+        const step = monster.speed * 0.45 * (speedMultiplier === undefined ? 1 : speedMultiplier) * dt;
         monster.pos.x += (dx / dist) * step;
         monster.pos.y += (dy / dist) * step;
       }
@@ -1536,19 +3413,29 @@
       monster.attackCooldown = monster.def.attackCooldownMs;
       monster.attackAnim = 1;
 
+      // evasion (Ninja passives, light armour)
+      if (Utils.random() < (player.evasion || 0)) {
+        Effects.addFloater(player.pos.x, player.pos.y - 64, 'MISS', { color: '#bfefff', size: 16, life: 700 });
+        Log.push(monster.name + ' misses ' + player.name + '.', null);
+        emit('playerDodged', { monster: monster, player: player });
+        return;
+      }
+
       const result = Combat.rollDamage(monster, player);
-      player.hp = Math.max(0, player.hp - result.damage);
+      const damage = Combat.mitigate(player, result.damage);
+      player.hp = Math.max(0, player.hp - damage);
       player.hitFlash = 1;
       player.hurtTimer = COMBAT.outOfCombatRegenDelayMs;
+      Skills.addRage(player, 5);
 
-      Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + result.damage, {
+      Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, {
         color: '#ff8080', size: 18
       });
       Effects.burst(player.pos.x, player.pos.y - 4, '#ff9b9b', 6);
       Effects.addShake(4);
 
-      Log.push(monster.name + ' hits ' + player.name + ' for ' + result.damage + ' damage.', 'log--hurt');
-      emit('playerDamaged', { monster: monster, damage: result.damage });
+      Log.push(monster.name + ' hits ' + player.name + ' for ' + damage + ' damage.', 'log--hurt');
+      emit('playerDamaged', { monster: monster, damage: damage });
 
       if (player.hp <= 0) knockDownPlayer(player);
     }
@@ -1558,6 +3445,9 @@
       player.downed = true;
       player.respawnTimer = 3;
       player.attackAnim = 0;
+      player.stealthMs = 0;
+      player.buffs = [];
+      Stats.recompute(player);
       Input.reset();
       Log.push(player.name + ' has fallen! Recovering...', 'log--down');
       Effects.addShake(9);
@@ -1571,6 +3461,9 @@
       player.pos.x = PLAYER_DEF.spawn.x;
       player.pos.y = PLAYER_DEF.spawn.y;
       player.hurtTimer = 0;
+      Stats.recompute(player);
+      player.hp = player.maxHp;
+      player.mp = player.maxMp;
       Effects.burst(player.pos.x, player.pos.y, '#9ad1ff', 16, { speedMax: 130, lift: 60 });
       Log.push(player.name + ' is back on their feet.', 'log--level');
       emit('playerRevived', { player: player });
@@ -1584,6 +3477,7 @@
       monster.aggro = false;
       monster.hitFlash = 0;
       monster.spawnPulse = 1;
+      Statuses.clear(monster);
       monster.wanderTimer = Utils.randRange(0.6, 1.8);
       Effects.burst(monster.pos.x, monster.pos.y, monster.def.palette.shine, 18, { speedMax: 120, lift: 20 });
       Effects.addFloater(monster.pos.x, monster.pos.y - 66, monster.name + ' appears!', {
@@ -1603,17 +3497,14 @@
       while (player.exp >= player.expToNext) {
         player.exp -= player.expToNext;
         player.level += 1;
-        player.maxHp += PROGRESSION.hpPerLevel;
-        player.maxMp += PROGRESSION.mpPerLevel;
-        player.attack += PROGRESSION.attackPerLevel;
-        player.defense += PROGRESSION.defensePerLevel;
         player.expToNext = expNeededForLevel(player.level);
+        Stats.recompute(player);              // per-class growth curve
         if (PROGRESSION.fullHealOnLevelUp) {
           player.hp = player.maxHp;
           player.mp = player.maxMp;
         }
         leveled = true;
-        Log.push('LEVEL UP! ' + player.name + ' reached level ' + player.level + '.', 'log--level');
+        Log.push('LEVEL UP! ' + player.name + ' the ' + player.title + ' reached level ' + player.level + '.', 'log--level');
         emit('levelUp', { player: player });
       }
       if (leveled) {
@@ -1630,7 +3521,7 @@
       if (!monster || !monster.alive) return;
       monster.hp = Math.max(0, monster.hp - amount);
       monster.hitFlash = 1;
-      if (monster.hp <= 0) killMonster(monster);
+      if (monster.hp <= 0) killMonster(monster, state.player);
     }
 
     function teleportPlayer(x, y) {
@@ -1652,7 +3543,18 @@
       on: on,
       emit: emit,
       registerSystem: registerSystem,
-      playerAttack: playerAttack,
+      playerAttack: playerBasicAttack,
+      playerBasicAttack: playerBasicAttack,
+      castSkill: castSkill,
+      hitMonster: hitMonster,
+      nearestMonster: nearestMonster,
+      monstersNear: monstersNear,
+      healPlayer: healPlayer,
+      createCharacter: createCharacter,
+      createMonsters: createMonsters,
+      setScreen: setScreen,
+      saveCharacter: saveCharacter,
+      loadSavedCharacter: loadSavedCharacter,
       damageMonster: damageMonster,
       teleportPlayer: teleportPlayer,
       expNeededForLevel: expNeededForLevel,
@@ -1665,14 +3567,20 @@
    * 10. PUBLIC API + BOOTSTRAP
    * ========================================================== */
   const Mythara = {
-    version: '0.1.0-mvp',
+    version: '0.2.0-classes',
     Game: Game,
     Input: Input,
     Combat: Combat,
+    Statuses: Statuses,
+    Projectiles: Projectiles,
+    Skills: Skills,
+    Stats: Stats,
     Effects: Effects,
     Renderer: Renderer,
     HUD: HUD,
     Log: Log,
+    CharacterSelect: CharacterSelect,
+    Classes: DATA.CLASSES,
     Utils: Utils,
     DATA: DATA
   };
