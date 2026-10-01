@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0d0b1a" />
+  <meta name="description" content="Mythara Online — a browser fantasy MMORPG. MVP foundation build." />
+  <title>Mythara Online</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="theme-verdant">
+
+  <div class="game-shell">
+
+    <!-- ================= HEADER ================= -->
+    <header class="game-header">
+      <h1 class="game-title">Mythara <span class="game-title__accent">Online</span></h1>
+      <p class="game-zone" id="zone-name">Verdant Hollow — Training Grounds</p>
+    </header>
+
+    <!-- ================= CHARACTER HUD ================= -->
+    <section class="hud" aria-label="Character status">
+
+      <div class="hud__identity">
+        <div class="hud__portrait" aria-hidden="true"><span>J</span></div>
+        <div class="hud__names">
+          <span class="hud__name" id="player-name">Jingle</span>
+          <span class="hud__level" id="player-level">Lv. 1 Adventurer</span>
+        </div>
+      </div>
+
+      <div class="hud__bars">
+        <div class="bar bar--hp">
+          <span class="bar__label">HP</span>
+          <div class="bar__track" role="progressbar" aria-label="Hit points"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" id="hp-bar">
+            <div class="bar__fill" id="hp-fill"></div>
+          </div>
+          <span class="bar__value" id="hp-value">100 / 100</span>
+        </div>
+
+        <div class="bar bar--mp">
+          <span class="bar__label">MP</span>
+          <div class="bar__track" role="progressbar" aria-label="Mana points"
+               aria-valuemin="0" aria-valuemax="30" aria-valuenow="30" id="mp-bar">
+            <div class="bar__fill" id="mp-fill"></div>
+          </div>
+          <span class="bar__value" id="mp-value">30 / 30</span>
+        </div>
+
+        <div class="bar bar--exp">
+          <span class="bar__label">EXP</span>
+          <div class="bar__track" role="progressbar" aria-label="Experience"
+               aria-valuemin="0" aria-valuemax="50" aria-valuenow="0" id="exp-bar">
+            <div class="bar__fill" id="exp-fill"></div>
+          </div>
+          <span class="bar__value" id="exp-value">0 / 50</span>
+        </div>
+      </div>
+
+      <div class="hud__gold" title="Gold">
+        <span class="hud__gold-icon" aria-hidden="true">&#9670;</span>
+        <span class="hud__gold-value" id="gold-value">0</span>
+        <span class="hud__gold-label">gold</span>
+      </div>
+    </section>
+
+    <!-- ================= STAGE ================= -->
+    <main class="stage" id="stage">
+      <canvas id="game-canvas" width="960" height="540" aria-label="Mythara Online game world"></canvas>
+
+      <div class="stage__target" id="target-plate" hidden>
+        <div class="target__head">
+          <span class="target__name" id="target-name">Green Slime</span>
+          <span class="target__level" id="target-level">Lv. 1</span>
+        </div>
+        <div class="bar bar--enemy">
+          <div class="bar__track">
+            <div class="bar__fill" id="target-hp-fill"></div>
+          </div>
+          <span class="bar__value" id="target-hp-value">0 / 0</span>
+        </div>
+      </div>
+
+      <div class="stage__banner" id="banner" hidden aria-live="polite"></div>
+
+      <!-- Mobile / touch controls (auto-shown on touch devices, toggleable) -->
+      <div class="touch-controls" id="touch-controls">
+        <div class="dpad" role="group" aria-label="Movement controls">
+          <button class="dpad__btn dpad__btn--up"    data-dir="up"    aria-label="Move up">&#9650;</button>
+          <button class="dpad__btn dpad__btn--left"  data-dir="left"  aria-label="Move left">&#9664;</button>
+          <button class="dpad__btn dpad__btn--right" data-dir="right" aria-label="Move right">&#9654;</button>
+          <button class="dpad__btn dpad__btn--down"  data-dir="down"  aria-label="Move down">&#9660;</button>
+        </div>
+        <button class="touch-attack" id="touch-attack" aria-label="Attack">Attack</button>
+      </div>
+    </main>
+
+    <!-- ================= FOOTER: LOG + ACTIONS ================= -->
+    <footer class="game-footer">
+      <ul class="combat-log" id="combat-log" aria-live="polite" aria-label="Combat log"></ul>
+
+      <div class="actions">
+        <button class="btn btn--attack" id="attack-button" type="button">
+          <span class="btn__icon" aria-hidden="true">&#9876;</span> Attack
+        </button>
+        <button class="btn btn--ghost" id="touch-toggle" type="button" aria-pressed="false">
+          Touch controls
+        </button>
+        <p class="hint">
+          Move: <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+          &middot; Attack: <kbd>Space</kbd>
+        </p>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="data.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
