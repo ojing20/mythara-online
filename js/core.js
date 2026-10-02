@@ -12,7 +12,7 @@
 (function (root) {
   'use strict';
 
-  const Core = { version: '0.3.0' };
+  const Core = { version: '0.4.0-cloud' };
 
   /* ---------------- Bus ---------------- */
   const Bus = (function () {
@@ -142,6 +142,17 @@
       const m = Math.floor(total / 60);
       const s = total % 60;
       return m + ':' + (s < 10 ? '0' : '') + s;
+    },
+    /** "just now" / "12m ago" / "3h ago" / "2d ago" — used by sync status. */
+    timeAgo: function (timestamp) {
+      if (!timestamp) return 'never';
+      const seconds = Math.floor((Date.now() - timestamp) / 1000);
+      if (seconds < 45) return 'just now';
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return minutes + 'm ago';
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return hours + 'h ago';
+      return Math.floor(hours / 24) + 'd ago';
     },
     duration: function (ms) {
       const total = Math.max(0, Math.floor((ms || 0) / 1000));

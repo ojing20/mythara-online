@@ -7,7 +7,9 @@ Original fantasy MMORPG game project
 
 The build now ships a complete single-player RPG loop on top of the canvas combat engine:
 accounts, a main menu, 10 chapters × 5 stages (50 stages, 10 bosses), bot arena duels, levels,
-equipment with upgrades, optional summoning, daily quests and rewards — all local-first.
+equipment with upgrades, optional summoning, daily quests and rewards — all local-first, with an
+optional **Mythara account server** so one account carries the same items and progress across a
+phone, a PC and a tablet.
 
 A browser fantasy MMORPG built with plain **HTML + CSS + JavaScript** — no frameworks, no build
 step, no dependencies, and no external art assets (every sprite and background is drawn with
@@ -16,6 +18,11 @@ canvas code).
 **Run it:** open `index.html` in any modern browser, or serve the folder:
 
 ```bash
+# with accounts + multi-device sync (recommended)
+node server/server.js
+# prints:  PC http://localhost:8123 · Phone http://<your-lan-ip>:8123 · Tablet the same URL
+
+# or offline-only, no accounts server
 python3 -m http.server 8123
 # then visit http://localhost:8123
 ```
@@ -214,6 +221,70 @@ Dark-fantasy theme with gold accents, large tappable buttons, animated panels, p
 portraits, icons and a battle HUD (wave counter, objective, boss bar with phase, potion bar).
 Layouts adapt to desktop, tablet and phone widths, and combat is comfortable in landscape.
 
+## Cloud accounts — MYTHARA SERVER → DATABASE → Phone · PC · Tablet
+
+`node server/server.js` hosts the game **and** the account API on one origin (zero dependencies —
+Node's own `http`/`fs`/`crypto` only). Open the printed address on every device, log in with the
+same username and password, and the same account, items and progress are there:
+
+```
+MYTHARA SERVER ── DATABASE ──┬── Phone   ┐
+                             ├── PC      ├── JINGLE · same account · same items · same progress
+                             └── Tablet  ┘
+```
+
+```bash
+node server/server.js            # http://localhost:8123 + LAN URL for phones/tablets
+PORT=9000 node server/server.js  # custom port
+QUIET=1 node server/server.js    # no request log
+```
+
+### How a device stays in sync
+
+1. **Local-first.** Every change is written to this device's storage immediately, so the game keeps
+   working offline — on a plane, in a tunnel, or opened straight from `file://`.
+2. **Revision-checked saves.** Each account has a `revision` number. A device may only overwrite the
+   copy it last downloaded (`baseRevision`). A stale write gets `409 Conflict` instead of silently
+   clobbering the other device's work.
+3. **Merge instead of lose.** On a conflict the client merges both copies and retries: stage stars,
+   clears, levels, unlocks and inventory items are the **union**, while counters and currencies take
+   the higher value, so nothing earned on either device disappears. (Honest note: that policy is
+   player-friendly but not cheat-proof. A production server would store an operation log instead.)
+4. **Push on every save.** `Account.save()` schedules a push; hiding the tab or closing the page
+   flushes with `keepalive`. The Settings screen shows *Sync: connected · last sync 2m ago*, offers
+   **[Sync now]**, and falls back to *Sync: offline* when the server is unreachable.
+
+`?server=http://192.168.1.20:8123` on the URL (or a saved setting) points a `file://` copy at a
+server, so you can play from a local folder and still sync.
+
+### API
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/health` | service name, version, account/session counts |
+| `POST /api/register` | `{username, email, password, confirm}` → `{token, account}` |
+| `POST /api/login` | `{identifier, password}` (username **or** email) → `{token, account}` |
+| `GET /api/session` | validate a `Bearer` token |
+| `GET /api/account` | the account document + `revision` |
+| `PUT /api/account` | `{account, baseRevision, force}` → `200` or `409 {conflict, revision, account}` |
+| `POST /api/password` | change password and revoke every other session |
+| `POST /api/logout` | revoke this token |
+
+### Server side: what it does and does not do
+
+- ✅ Passwords are hashed with **scrypt** (N=16384, r=8, p=1) and a per-account random salt —
+  plain text or the client-side prototype digest is never stored. Login compares with
+  `timingSafeEqual`; tokens are `crypto.randomBytes(32)`.
+- ✅ Durable storage in `server/data/mythara-db.json` (atomic temp-file + rename writes, 120 ms
+  debounce, corrupt-file quarantine, 30-day session TTL). The data shape is SQL-swappable:
+  `{version, accounts, sessions}`.
+- ✅ Static hosting that refuses to serve `server/` or dotfiles, 1 MB request cap, 512 KB profile cap.
+- ⚠️ No TLS, no rate limiting and no email verification yet — put it behind a reverse proxy
+  (Caddy/nginx/Cloudflare) before exposing it to the internet, and treat the JSON file as a
+  single-writer database for one host.
+- ⚠️ **It synchronises accounts, it is not live multiplayer.** Arena duels are still against the
+  game's own AI bots, and two devices never share a fight.
+
 ## Files (RPG progression build)
 
 | File | Purpose |
@@ -230,20 +301,29 @@ Layouts adapt to desktop, tablet and phone widths, and combat is comfortable in 
 | `js/systems.js` | Reusable systems: quests, daily rewards, shop, summon, gear, arena ranks, reward formatting |
 | `js/battle.js` | Battle controller: stage waves, boss encounters, stars and rewards, arena bot AI |
 | `js/ui.js` | Every app screen (auth, menu, adventure, arena, inventory, equipment, summon, quests, shop, settings) plus modals, toasts and the battle HUD |
-| `js/app.js` | Flow controller: loading → auth → menu → select → battle → rewards, saving, settings and legacy-save import |
+| `js/app.js` | Flow controller: loading → auth → menu → select → battle → rewards, saving, settings, account sync and legacy-save import |
+| `js/sync.js` | `MytharaSync`: server detection, cloud auth backend, push/pull/reconcile, conflict merge, offline queue |
+| `server/server.js` | Zero-dependency static host + API (`node server/server.js`), LAN URL banner, graceful DB flush |
+| `server/api.js` | Routes, `Bearer` auth, body/profile caps, CORS, revision conflict responses |
+| `server/auth.js` | scrypt hashing, credential validation, token minting, `publicAccount()` |
+| `server/db.js` | JSON file database: atomic writes, debounce, sessions, TTL pruning, quarantine |
+| `server/tests/api.test.js` | `node --test server/tests` — 12 end-to-end server checks |
 
 ### Tests
 
-Five headless suites (jsdom + native canvas) cover the build — 464 checks total:
+Seven suites cover the build — 506 checks total:
 
 | Suite | Checks | Covers |
 | --- | --- | --- |
 | `test.js` | 85 | Engine boot, HUD, combat, skills, touch controls, long-run stability |
 | `classes.test.js` | 129 | All 10 classes, previews, persistence, mobile selection, original-art rules |
 | `storage.test.js` | 6 | Storage-blocked fallback paths |
-| `appflow.js` | 132 | Loading → register → menu → select → stage battle → bosses → arena → shop/summon → save/reload |
+| `appflow.js` | 133 | Loading → register → menu → select → stage battle → bosses → arena → shop/summon → save/reload |
 | `campaign.test.js` | 113 | All 50 stages and 10 bosses, unlocks, energy, quests, dailies, equipment, mobile, login variants, legacy import |
+| `server/tests/api.test.js` | 12 | Register/login, hashed storage, two devices pulling one account, 409 conflicts, token revocation, restart persistence |
+| `sync.test.js` | 28 | Two jsdom "devices" vs a real server: same coins/items/stages/levels, offline edits merge, logout revokes the token |
 
 ## Roadmap (not implemented yet)
 
-Guilds · dungeons · online multiplayer (the arena is bot-only) · 3v3 team battles.
+Guilds · dungeons · live online multiplayer (accounts sync, but fights are against bots) ·
+3v3 team battles.

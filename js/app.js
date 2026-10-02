@@ -23,6 +23,7 @@
   const UI = root.MytharaUI;
   const Mythara = root.Mythara;
   const Battle = root.MytharaBattle;
+  const Sync = root.MytharaSync;
   const Items = root.MYTHARA_ITEMS;
   const Stages = root.MYTHARA_STAGES;
   const Enemies = root.MYTHARA_ENEMIES;
@@ -56,6 +57,9 @@
       }
 
       doc().body.classList.add('flow-app');
+      // Look for the Mythara account server in the background; the
+      // loading bar gives it time, and `ready()` never blocks the game.
+      if (Sync) Sync.install();
       Mythara.boot({});
       Systems.install();
       UI.mount(doc());
@@ -90,13 +94,19 @@
       const loading = byId('screen-loading');
       if (loading) loading.classList.add('is-done');
 
-      const restored = Auth.restoreSession();
-      if (restored && restored.id && Account.load(restored.id)) {
-        session = { accountId: restored.id, username: restored.username };
-        enterMenu({ silent: true });
-        return;
-      }
-      showAuth();
+      // Give the cloud probe a moment to refresh a remembered session,
+      // then continue either way — offline play must never be blocked.
+      const ready = Sync ? Sync.ready(3500) : Promise.resolve(null);
+      ready.then(function () {
+        const restored = Auth.restoreSession();
+        if (restored && restored.id && Account.load(restored.id)) {
+          session = { accountId: restored.id, username: restored.username };
+          enterMenu({ silent: true });
+          if (Sync && Sync.isCloud()) Sync.reconcile({ accountId: restored.id });
+          return;
+        }
+        showAuth();
+      });
     }
 
     /** Mirror saved settings onto body classes the engine reads. */
@@ -227,6 +237,7 @@
         'gear.sell': function (data) { sellGear(data.item); },
         'unlock.buy': function (data) { unlockCharacter(data.class); },
         'settings.toggle': function (data) { toggleSetting(data.key, data.value); },
+        'sync.now': function () { syncNow(); },
         'save': function () { Account.save(); UI.toast('Progress saved.', 'good'); }
       };
       const handler = table[action];
@@ -242,34 +253,48 @@
       const username = (byId('login-user') || {}).value || '';
       const password = (byId('login-pass') || {}).value || '';
       const remember = !!(byId('login-remember') || {}).checked;
-      const result = Auth.login({ identifier: username, password: password, remember: remember });
-      if (!result.ok) { UI.toast(result.error || 'Login failed.', 'bad'); return; }
-      const record = Account.load(result.account.id);
-      if (!record) { UI.toast('Account data is missing on this device.', 'bad'); return; }
-      Auth.rememberSession(remember);
-      session = { accountId: record.id, username: record.username };
-      dailyShown = false;
-      UI.toast('Welcome back, ' + record.username + '!', 'good');
-      migrateLegacyCharacter();
-      enterMenu();
+      if (Sync && Sync.isCloud()) UI.toast('Contacting the Mythara server…', '');
+      Promise.resolve(Auth.login({ identifier: username, password: password, remember: remember })).then(function (result) {
+        if (!result || !result.ok) { UI.toast((result && result.error) || 'Login failed.', 'bad'); return; }
+        const record = Account.load(result.account.id);
+        if (!record) { UI.toast('Account data is missing on this device.', 'bad'); return; }
+        Auth.rememberSession(remember);
+        session = { accountId: record.id, username: record.username };
+        dailyShown = false;
+        UI.toast('Welcome back, ' + record.username + '!', 'good');
+        migrateLegacyCharacter();
+        enterMenu();
+        if (Sync && Sync.isCloud()) syncAfterLogin(record);
+      });
     }
 
     function doRegister() {
-      const result = Auth.register({
+      if (Sync && Sync.isCloud()) UI.toast('Creating your account on the server…', '');
+      Promise.resolve(Auth.register({
         username: (byId('reg-user') || {}).value || '',
         email: (byId('reg-email') || {}).value || '',
         password: (byId('reg-pass') || {}).value || '',
         confirm: (byId('reg-pass2') || {}).value || ''
+      })).then(function (result) {
+        if (!result || !result.ok) { UI.toast((result && result.error) || 'Registration failed.', 'bad'); return; }
+        Auth.rememberSession(true);
+        const record = Account.load(result.account.id);
+        if (!record) { UI.toast('Could not open the new account.', 'bad'); return; }
+        session = { accountId: record.id, username: record.username };
+        dailyShown = false;
+        UI.toast('Account created. Welcome to Mythara!', 'good');
+        migrateLegacyCharacter();
+        enterMenu();
       });
-      if (!result.ok) { UI.toast(result.error || 'Registration failed.', 'bad'); return; }
-      Auth.rememberSession(true);
-      const record = Account.load(result.account.id);
-      if (!record) { UI.toast('Could not open the new account.', 'bad'); return; }
-      session = { accountId: record.id, username: record.username };
-      dailyShown = false;
-      UI.toast('Account created. Welcome to Mythara!', 'good');
-      migrateLegacyCharacter();
-      enterMenu();
+    }
+
+    /** After a cloud login, compare this device's copy with the server's. */
+    function syncAfterLogin(record) {
+      Sync.reconcile({ accountId: record.id }).then(function (out) {
+        if (!out || !out.ok) return;
+        UI.refreshHud();
+        if (out.pulled) UI.toast('Progress synced from another device.', 'good');
+      });
     }
 
     function doLogout() {
@@ -279,6 +304,7 @@
         okLabel: 'Log out',
         onOk: function () {
           if (Account.isReady()) Account.save();
+          if (Sync) Sync.logout();
           Auth.logout();
           session = null;
           Battle.leave();
@@ -569,6 +595,20 @@
     }
 
     function currentSummary() { return lastSummary; }
+    /** Manual save + server round-trip from the settings screen. */
+    function syncNow() {
+      if (!Account.isReady()) { UI.toast('Log in first.', 'warn'); return; }
+      Account.save();
+      if (!Sync || !Sync.isCloud()) { UI.toast('Offline mode — progress is saved on this device.', 'warn'); return; }
+      UI.toast('Syncing…', '');
+      Sync.reconcile({ force: true }).then(function (out) {
+        if (out && out.ok) UI.toast(out.pulled ? 'Downloaded the newest progress.' : 'Progress synced.', 'good');
+        else UI.toast((out && out.error) || 'Sync failed — will retry.', 'bad');
+        UI.refreshHud();
+        UI.refreshSyncStatus();
+      });
+    }
+
     function sessionInfo() { return session; }
     function currentFlow() { return flow; }
 

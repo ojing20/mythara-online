@@ -24,8 +24,9 @@
   const AccountRef = root.MytharaAccount;
   const Account = AccountRef ? AccountRef.Account : null;
   const Systems = root.MytharaSystems;
+  const Sync = root.MytharaSync;
 
-  const VERSION = (root.Mythara && root.Mythara.version) || '0.3.0-rpg';
+  const VERSION = (root.Mythara && root.Mythara.version) || '0.4.0-cloud';
 
   const TIPS = [
     'Tip: every class can clear the story — pick the one you enjoy.',
@@ -1005,9 +1006,14 @@
     accountPanel.appendChild(who);
     const row = h('div', 'modal__row');
     row.appendChild(button('Save now', 'btn--tiny btn--gold', 'save'));
+    row.appendChild(button('Sync now', 'btn--tiny', 'sync.now'));
     row.appendChild(button('Log out', 'btn--tiny btn--ghost', 'auth.logout'));
     accountPanel.appendChild(row);
-    accountPanel.appendChild(h('p', 'panel-hint', 'Version ' + VERSION + ' · prototype build. Progress lives on this device.'));
+
+    const syncLine = h('p', 'panel-hint settings-sync', '');
+    syncLine.id = 'settings-sync';
+    accountPanel.appendChild(syncLine);
+    accountPanel.appendChild(h('p', 'panel-hint', 'Version ' + VERSION + ' · prototype build. Progress is saved on this device and synced to the Mythara server whenever it is reachable.'));
     parts.body.appendChild(accountPanel);
 
     const credits = h('div', 'panel');
@@ -1029,6 +1035,29 @@
       const p = Account.profile();
       ui.settingsWho.textContent = (p.username || 'player') + (p.email ? ' · ' + p.email : '') + ' · account Lv. ' + p.level;
     }
+    refreshSyncStatus();
+  }
+
+  /** One human-readable line about the account server. */
+  function refreshSyncStatus() {
+    const el = (ui && ui.settingsSync) || doc.getElementById('settings-sync');
+    if (!el) return;
+    if (!Sync) { el.textContent = 'Sync: offline build — progress lives on this device.'; return; }
+    const state = Sync.status();
+    if (state.mode !== 'cloud') {
+      el.textContent = 'Sync: offline — ' + (state.lastError || 'playing on this device only.');
+      return;
+    }
+    const labels = {
+      online: 'connected',
+      syncing: 'syncing…',
+      connecting: 'connecting…',
+      conflict: 'merging changes…',
+      error: 'retrying'
+    };
+    const when = state.lastSyncAt ? ' · last sync ' + Format.timeAgo(state.lastSyncAt) : '';
+    const pending = state.pending ? ' · unsaved changes queued' : '';
+    el.textContent = 'Sync: ' + (labels[state.status] || state.status) + when + pending + ' · server: ' + state.server;
   }
 
   /* ============================================================
@@ -1406,6 +1435,7 @@
     ui.menuPortrait = rootEl.querySelector('.menu-hero__portrait');
     ui.authError = doc.getElementById('auth-error');
     ui.settingsWho = doc.getElementById('settings-who');
+    ui.settingsSync = doc.getElementById('settings-sync');
 
     buildBattleHud();
     bindActions();
@@ -1417,6 +1447,7 @@
     Bus.on('account:changed', function () { refreshHud(); refresh(); });
     Bus.on('gear:changed', refreshHud);
     Bus.on('gear:upgraded', refreshHud);
+    Bus.on('sync:status', function () { refreshSyncStatus(); });
 
     return { screens: screens, show: show };
   }
@@ -1441,6 +1472,7 @@
     current: current,
     refresh: refresh,
     refreshHud: refreshHud,
+    refreshSyncStatus: refreshSyncStatus,
     toast: toast,
     confirm: confirmDialog,
     openModal: openModal,

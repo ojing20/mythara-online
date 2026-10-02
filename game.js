@@ -4788,7 +4788,7 @@
    * 10. PUBLIC API + BOOTSTRAP
    * ========================================================== */
   const Mythara = {
-    version: '0.3.0-rpg',
+    version: '0.4.0-cloud',
     Game: Game,
     Input: Input,
     Combat: Combat,

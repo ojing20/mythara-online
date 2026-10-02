@@ -35,12 +35,10 @@
     function install() {
       if (installed) return;
       installed = true;
+      // Only the counters Account does not already track itself belong
+      // here — recordStageClear()/recordPvp()/usePotion() count their own
+      // quest stats, so hooking those events again would double-count.
       Bus.on('enemy:killed', function () { Account.trackQuest('monstersDefeated', 1); });
-      Bus.on('battle:end', function (summary) {
-        if (!summary || !summary.victory) return;
-        Account.trackQuest('victories', 1);
-      });
-      Bus.on('stage:cleared', function () { Account.trackQuest('stagesCleared', 1); });
     }
 
     function list() { return Account.questList(); }

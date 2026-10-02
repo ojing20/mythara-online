@@ -202,20 +202,44 @@
       return null;
     }
 
+    /**
+     * Swap the auth backend. Pass null to go back to the built-in
+     * offline backend — that is what js/sync.js does when the Mythara
+     * server is not reachable and the game must keep working.
+     */
     function setBackend(custom) {
-      if (!custom || typeof custom.login !== 'function' || typeof custom.register !== 'function') {
+      if (custom !== null && (!custom || typeof custom.login !== 'function' || typeof custom.register !== 'function')) {
         throw new Error('Auth backend must implement register() and login()');
       }
-      backend = custom;
+      backend = custom || null;
       return backend;
     }
 
     function driver() { return backend || localBackend; }
 
-    function register(payload) {
-      const result = driver().register(payload);
+    function backendKind() { return driver().kind || 'custom'; }
+
+    /** Adopt the account a backend returned (also used for promises). */
+    function adopt(result, payload) {
       if (result && result.ok && result.account) {
         session = { id: result.account.id, username: result.account.username, remember: !!(payload && payload.remember) };
+      }
+      return result;
+    }
+
+    function register(payload) {
+      const result = driver().register(payload);
+      // A network backend answers with a promise; the offline one is instant.
+      if (result && typeof result.then === 'function') {
+        return result.then(function (resolved) {
+          adopt(resolved, payload);
+          if (resolved && resolved.ok && resolved.account) Core.Bus.emit('auth:registered', { username: resolved.account.username });
+          if (resolved && resolved.ok && resolved.account) Core.Bus.emit('auth:login', { username: resolved.account.username });
+          return resolved;
+        });
+      }
+      adopt(result, payload);
+      if (result && result.ok && result.account) {
         Core.Bus.emit('auth:registered', { username: result.account.username });
         Core.Bus.emit('auth:login', { username: result.account.username });
       }
@@ -224,10 +248,15 @@
 
     function login(payload) {
       const result = driver().login(payload);
-      if (result && result.ok && result.account) {
-        session = { id: result.account.id, username: result.account.username, remember: !!(payload && payload.remember) };
-        Core.Bus.emit('auth:login', { username: result.account.username });
+      if (result && typeof result.then === 'function') {
+        return result.then(function (resolved) {
+          adopt(resolved, payload);
+          if (resolved && resolved.ok && resolved.account) Core.Bus.emit('auth:login', { username: resolved.account.username });
+          return resolved;
+        });
       }
+      adopt(result, payload);
+      if (result && result.ok && result.account) Core.Bus.emit('auth:login', { username: result.account.username });
       return result;
     }
 
@@ -261,6 +290,7 @@
       rememberSession: rememberSession,
       currentSession: currentSession,
       setBackend: setBackend,
+      backendKind: backendKind,
       validate: validateCredentials,
       listAccounts: function () { return localBackend.listAccounts(); },
       hashingRounds: Hasher.rounds
@@ -337,6 +367,9 @@
     }
 
     function isReady() { return !!record; }
+    /** The live account document (used by js/sync.js so a push never sends a stale copy). */
+    function raw() { return record; }
+    function detach() { record = null; }
     function profile() { return record ? record.profile : null; }
     function username() { return record ? record.username : ''; }
     function email() { return record ? record.email : ''; }
@@ -876,7 +909,7 @@
     }
 
     return {
-      attach: attach, load: load, migrate: migrate, importLegacySave: importLegacySave, isReady: isReady, profile: profile,
+      attach: attach, detach: detach, raw: raw, load: load, migrate: migrate, importLegacySave: importLegacySave, isReady: isReady, profile: profile,
       save: save, username: username, email: email, id: id,
       addCoins: addCoins, addGems: addGems, addTickets: addTickets,
       canAfford: canAfford, spend: spend,
