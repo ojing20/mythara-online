@@ -289,9 +289,15 @@
       const monsters = (gameState && gameState.monsters) || [];
       const aliveMonsters = monsters.filter(function (m) { return m.alive; });
 
-      // lock-on target: keep the current one until it dies
+      // lock-on target: the one the player selected, else the nearest live threat
+      const chosen = gameState && gameState.target;
+      if (chosen && (!chosen.alive || monsters.indexOf(chosen) === -1)) {
+        if (chosen === state.lockTarget) state.lockTarget = null;
+      } else if (chosen && chosen.alive) {
+        state.lockTarget = chosen;
+      }
       if (state.lockTarget && (!state.lockTarget.alive || monsters.indexOf(state.lockTarget) === -1)) state.lockTarget = null;
-      if (!state.lockTarget || !state.lockTarget.alive) {
+      if (!state.lockTarget) {
         const primary = aliveMonsters[0] || null;
         const boss = aliveMonsters.filter(function (m) { return m.isBoss; })[0];
         state.lockTarget = boss || primary;
@@ -356,6 +362,7 @@
       if (player && gameState.screen === 'game') {
         world.drawProps(P, time, state.camera, state.qualityLevel.propDist, Math.min(560, state.qualityLevel.propDist), state.qualityLevel.level);
         drawActors(P, gameState, player, aliveMonsters, time);
+        drawLoot(P, gameState, time);
         VFX.drawProjectiles(P, time);
         VFX.draw(P, time);
       }
@@ -372,10 +379,11 @@
       if (player && gameState.screen === 'game') {
         Actors.drawOverlays(P, gameState, {
           time: time,
-          target: state.lockTarget,
+          target: (chosen && chosen.alive) ? chosen : state.lockTarget,
           lockTarget: state.lockOn ? state.lockTarget : null,
           showAllNames: state.qualityLevel.level >= 3
         });
+        drawLootLabels(P, gameState, time);
         VFX.drawParticles(P);
         VFX.drawFloaters(P, gameState);
       }
@@ -401,6 +409,66 @@
       };
       autoQuality(step);
       return true;
+    }
+
+    /**
+     * Screen-space pick: which monster is under a tap/click? Every live
+     * monster is projected with the very camera that drew the frame, so the
+     * hit box always matches what the player sees.
+     */
+    function pickAt(cssX, cssY, gameState) {
+      const cam = state.camera;
+      const vp = state.vp;
+      if (!cam || !gameState) return null;
+      const sx = (cssX / (vp.cssWidth || vp.width)) * vp.width;
+      const sy = (cssY / (vp.cssHeight || vp.height)) * vp.height;
+      const monsters = gameState.monsters || [];
+      let best = null;
+      let bestScore = Infinity;
+      for (let i = 0; i < monsters.length; i++) {
+        const m = monsters[i];
+        if (!m.alive) continue;
+        const scale = m.scale || 1;
+        const s = cam.project(v3(m.pos.x, 4 + scale * 14, m.pos.y), vp);
+        if (!s.visible) continue;
+        const zoom = clamp(s.scale / 0.5, 0.55, 1.6);
+        const halfW = Math.max(24, 28 * scale * zoom);
+        const halfH = Math.max(30, 44 * scale * zoom);
+        const dx = Math.abs(s.x - sx);
+        const dy = sy - s.y;
+        if (dx > halfW || dy > halfH * 1.15 || dy < -halfH) continue;
+        const score = dx + Math.abs(dy) * 0.6 + s.depth * 0.02;
+        if (score < bestScore) { bestScore = score; best = m; }
+      }
+      return best;
+    }
+
+    /** Terrain / prop line of fire, delegated to the active world. */
+    function blocked(ax, az, bx, bz) {
+      const world = state.world;
+      if (!world || !world.lineBlocked) return false;
+      return world.lineBlocked(ax, az, bx, bz);
+    }
+
+    /** The hometown safe ring, when the current region has one. */
+    function safeZone() {
+      const world = state.world;
+      if (!world || !world.safeRing) return null;
+      return world.safeRing;
+    }
+
+    /** Water depth at a world point (0 when no world exists yet). */
+    function waterDepth(x, z) {
+      const world = state.world;
+      if (!world || !world.waterDepth) return 0;
+      return world.waterDepth(x, z);
+    }
+
+    /** Cliff + solid-prop movement, delegated to the active world. */
+    function resolveMove(fromX, fromZ, toX, toZ, radius) {
+      const world = state.world;
+      if (!world || !world.resolveMove) return { x: toX, z: toZ, blocked: false };
+      return world.resolveMove(fromX, fromZ, toX, toZ, radius);
     }
 
     /**
@@ -433,6 +501,75 @@
       }
       void groundY;
       f.inWater = inWater;
+    }
+
+    /**
+     * Loot on the ground: a small floating gem in the drop's rarity colour,
+     * a soft glow and a pulsing ring. Cheap — a handful of polys each, and
+     * only for the few drops the player has not picked up yet.
+     */
+    function drawLoot(P, gameState, time) {
+      const loot = (gameState && gameState.loot) || [];
+      if (!loot.length) return;
+      const world = state.world;
+      for (let i = 0; i < loot.length; i++) {
+        const l = loot[i];
+        if (l.picked) continue;
+        const groundY = world && world.heightAt ? world.heightAt(l.x, l.y) : 0;
+        const bob = Math.sin(time * 2.6 + l.bob) * 1.6;
+        const fading = l.age > 78 ? (0.35 + 0.65 * Math.abs(Math.sin(time * 6))) : 1;
+        const y = groundY + 7 + bob;
+        S.blob(P, {
+          pos: v3(l.x, y, l.y), radii: v3(3.0, 4.2, 3.0), slices: 6, rings: 3,
+          color: l.colour || '#f2c14e', jitter: 0.3, seed: i + 3, yaw: time * 1.2
+        });
+        S.ring(P, {
+          x: l.x, z: l.y, y: groundY + 0.6, radius: 10 + Math.sin(time * 3 + l.bob) * 1.2,
+          thickness: 1.2, color: l.colour || '#f2c14e', alpha: 0.42 * fading, segments: 16, blend: 'lighter'
+        });
+        S.billboard(P, {
+          pos: v3(l.x, y, l.y), width: 13, height: 13,
+          color: l.colour || '#f2c14e', alpha: 0.16 * fading, soft: true, blend: 'lighter'
+        });
+      }
+    }
+
+    /**
+     * Loot name plates — nearest few drops only, and never stacked on top of
+     * each other: a pile of eight drops should still read like a pile, not a
+     * wall of text.
+     */
+    function drawLootLabels(P, gameState, time) {
+      const loot = (gameState && gameState.loot) || [];
+      const player = gameState && gameState.player;
+      if (!loot.length || !player) return;
+      const world = state.world;
+      const near = loot
+        .filter(function (l) { return !l.picked; })
+        .map(function (l) {
+          return { l: l, d: M.v3dist(v3(l.x, 0, l.y), v3(player.pos.x, 0, player.pos.y)) };
+        })
+        .filter(function (e) { return e.d <= 260; })
+        .sort(function (a, b) { return a.d - b.d; })
+        .slice(0, 4);
+      const placed = [];
+      near.forEach(function (entry) {
+        const l = entry.l;
+        if (l.age > 78 && Math.sin(time * 6) < 0) return;        // blink when expiring
+        const groundY = world && world.heightAt ? world.heightAt(l.x, l.y) : 0;
+        const spot = P.cam.project(v3(l.x, groundY + 18, l.y), P.vp);
+        if (!spot.visible) return;
+        const width = (l.name.length * 7) + 12;
+        const clash = placed.some(function (p) {
+          return Math.abs(p.x - spot.x) < (width + p.w) * 0.5 && Math.abs(p.y - spot.y) < 18;
+        });
+        if (clash) return;
+        placed.push({ x: spot.x, y: spot.y, w: width });
+        P.label(v3(l.x, groundY + 18, l.y), (l.kind === 'item' ? '\u2605 ' : '') + l.name, {
+          size: l.kind === 'item' ? 11.5 : 10.5, weight: '700',
+          color: l.colour || '#f2c14e', alpha: 0.92
+        });
+      });
     }
 
     function drawActors(P, gameState, player, aliveMonsters, time) {
@@ -734,6 +871,11 @@
       toggleLock: toggleLock,
       drawPreviewHero: drawPreviewHero,
       renderMinimap: renderMinimap,
+      pickAt: pickAt,
+      blocked: blocked,
+      resolveMove: resolveMove,
+      waterDepth: waterDepth,
+      safeZone: safeZone,
       tickHud: tickHud,
       updateHud: updateHud,
       camera: camera,

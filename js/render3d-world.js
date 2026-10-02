@@ -498,6 +498,38 @@
     return { props: list, detail: detail };
   }
 
+  /* ============================================================
+   * SOLID PROPS — what movement and line of fire must respect
+   * ------------------------------------------------------------
+   * Only genuinely solid scenery is listed (buildings, big rocks,
+   * ruins, tree trunks). Fences, lanterns, bushes and signposts
+   * stay decorative so the walkable field keeps its free-flowing
+   * feel — the combat rules and the play area are unchanged.
+   * ========================================================== */
+  const BLOCKER_RADIUS = {
+    house: 12, ruin: 10, well: 4.5, blacksmith: 11, market: 6.5,
+    tower: 9, watchtower: 10, fortress: 30, spire: 14, obeliskBig: 9,
+    pillar: 4, rock: 3.4, rockBig: 8, tree: 1.9, crystal: 3
+  };
+  const MAX_SLOPE = 0.5;              // walkable gradient; the playfield sits at 0.05
+
+  function blockerRadius(p) {
+    const key = String(p.type || '').split(':')[0];
+    const base = BLOCKER_RADIUS[key] || BLOCKER_RADIUS[p.type];
+    if (!base) return 0;
+    return base * (p.s || 1);
+  }
+
+  /** Filter a built prop list down to the solid circles movement cares about. */
+  function collectBlockers(list) {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const r = blockerRadius(list[i]);
+      if (r > 0) out.push({ x: list[i].x, z: list[i].z, r: r, type: list[i].type });
+    }
+    return out;
+  }
+
   /**
    * Scatter thousands of tiny ground details across the region. They are held
    * in a uniform grid so the renderer only touches the few hundred nearest
@@ -1831,10 +1863,93 @@
       void time;
     }
 
+    const blockers = collectBlockers(props);
+
+    /** Steepest local gradient — used to refuse walking up cliffs. */
+    function slopeAt(x, z) {
+      const s = 4;
+      const gx = Math.abs(heightAt(x + s, z) - heightAt(x - s, z)) / (2 * s);
+      const gz = Math.abs(heightAt(x, z + s) - heightAt(x, z - s)) / (2 * s);
+      return Math.max(gx, gz);
+    }
+
+    /**
+     * Move a circle from (fromX, fromZ) toward (toX, toZ), refusing cliffs
+     * and sliding around solid props. Pure maths — the engine keeps owning
+     * positions, this only says where the entity may legally stand.
+     */
+    function resolveMove(fromX, fromZ, toX, toZ, radius) {
+      const r = radius === undefined ? 12 : radius;
+      let x = toX;
+      let z = toZ;
+      let blocked = false;
+
+      if (slopeAt(x, z) > MAX_SLOPE) {
+        blocked = true;
+        if (slopeAt(toX, fromZ) <= MAX_SLOPE) { x = toX; z = fromZ; }
+        else if (slopeAt(fromX, toZ) <= MAX_SLOPE) { x = fromX; z = toZ; }
+        else { return { x: fromX, z: fromZ, blocked: true }; }
+      }
+
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < blockers.length; i++) {
+          const b = blockers[i];
+          const dx = x - b.x;
+          const dz = z - b.z;
+          const rr = b.r + r;
+          const d2 = dx * dx + dz * dz;
+          if (d2 >= rr * rr) continue;
+          blocked = true;
+          if (d2 < 1e-6) { x = b.x + rr; continue; }
+          const d = Math.sqrt(d2);
+          x = b.x + (dx / d) * rr;
+          z = b.z + (dz / d) * rr;
+        }
+      }
+      return { x: x, z: z, blocked: blocked };
+    }
+
+    /**
+     * Is the straight line between two points clear? Terrain that rises
+     * above the sight line (a ridge, the bowl lip) and solid props both
+     * block it, so arrows and spells cannot cross a cliff or a house.
+     */
+    function lineBlocked(ax, az, bx, bz) {
+      const ha = heightAt(ax, az);
+      const hb = heightAt(bx, bz);
+      for (let t = 0.12; t <= 0.881; t += 0.12) {
+        const x = ax + (bx - ax) * t;
+        const z = az + (bz - az) * t;
+        if (heightAt(x, z) - (ha + (hb - ha) * t) > 6) return true;
+      }
+      const dx = bx - ax;
+      const dz = bz - az;
+      const len2 = dx * dx + dz * dz || 1;
+      for (let i = 0; i < blockers.length; i++) {
+        const b = blockers[i];
+        if (b.r < 2.2) continue;                 // tree trunks never stop a shot
+        let t = ((b.x - ax) * dx + (b.z - az) * dz) / len2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const px = ax + dx * t - b.x;
+        const pz = az + dz * t - b.z;
+        if (px * px + pz * pz < b.r * b.r) return true;
+      }
+      return false;
+    }
+
+    // The safe ring only exists where the plaza does (Silverstone's hometown).
+    const safeRing = (theme_.id === 'hub' || theme_.id === 'chapter1')
+      ? { x: VILLAGE.x, z: VILLAGE.z, r: 74 } : null;
+
     return {
       theme: theme_,
       heightAt: heightAt,
       groundAt: heightAt,
+      safeRing: safeRing,
+      blockers: blockers,
+      slopeAt: slopeAt,
+      resolveMove: resolveMove,
+      lineBlocked: lineBlocked,
       drawRoad: drawRoad,
       drawDetail: drawDetail,
       detailCount: detail.length,

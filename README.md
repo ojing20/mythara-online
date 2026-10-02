@@ -86,14 +86,24 @@ Stats above are the effective level-1 values (class base + starting gear).
 
 ## Gameplay
 
-- **World** — Verdant Hollow training grounds with a procedural background (sky, sun, mountains,
-  hills, tree line, dirt path, grass and wildflowers), generated once and cached.
-- **Movement** — arrow keys or WASD, normalised diagonals, constrained to the walkable floor.
-- **Combat** — Attack button, `Space`/`J`/`Enter`, or tap the world; damage variance, critical
-  hits, floating numbers, hit flash, particles and screen shake.
-- **Enemies** — the Green Slime wanders, aggros, chases, attacks, dies and respawns after 4s.
-- **Rewards** — EXP and gold per kill, kill log, level-up banner, HP/MP regen, and knockdown +
-  auto-revive if you fall.
+- **World** — height-field terrain (grass, dirt paths, sand, rock, cliffs) with the Silverstone
+  village, a dirt road to the hunting grounds, water, weather and a day/night cycle.
+- **Movement** — arrow keys or WASD, normalised diagonals, constrained to the walkable floor and
+  blocked by cliffs, houses, big rocks and tree trunks (with wall sliding).
+- **Combat** — Attack button, `Space`/`J`/`Enter`, or tap/click the world; per-class swing timing,
+  damage variance, crits, floating numbers, hit flash, hit reactions, particles, screen shake and
+  procedural WebAudio attack/hit/death sounds.
+- **Targeting** — tap/click a monster to lock it (highlighted with a reticle and its own HP plate),
+  `Tab` cycles targets, `Esc` clears. Attacks check range *and* line of fire, so nothing is hit
+  through a wall, a cliff or a house.
+- **Enemies** — a seven-state AI (idle → patrol → detect → chase → attack → return to spawn →
+  death) with aggro ranges, leashes, obstacle avoidance and 4s respawn timers after death.
+- **Rewards** — EXP and gold per kill (paid exactly once per life), floating +EXP/+gold text, and
+  loot drops in rarity colours that you walk over to collect.
+- **Loot** — coins, potions, materials and equipment roll from per-tier drop tables
+  (`js/data-loot.js`); drops never land in water or inside solid props, and fade after 90s.
+- **Falling** — at 0 HP the hero is knocked down, combat stops, and after 3s they revive at the
+  nearest safe ground (the village gate when close to Silverstone) with full HP/MP.
 - **Mobile** — on-screen D-pad and Attack button, auto-shown on touch devices and toggleable
   from the footer.
 
@@ -104,6 +114,9 @@ Stats above are the effective level-1 values (class base + starting gear).
 | Move | Arrow keys / WASD | On-screen D-pad |
 | Attack | `Space`, `J` or `Enter` | Attack button, or tap the world |
 | Skills | `1`, `2`, `3` | Skill bar buttons |
+| Select target | Tap/click a monster | Tap a monster |
+| Cycle target | `Tab` / `Shift`+`Tab` | — |
+| Clear target | `Esc` | — |
 | Change character | — | "Change Character" button |
 
 ## Files
@@ -113,7 +126,9 @@ Stats above are the effective level-1 values (class base + starting gear).
 | `index.html` | Character-select screen, HUD, canvas stage, skill bar, touch controls, log |
 | `style.css` | Theme tokens, HUD/bar styling, selection screen, responsive + touch layouts |
 | `data.js` | All content: config, combat rules, progression, items, projectiles, skills, the 10 classes, monsters, zones |
-| `game.js` | Engine: `Utils`, `Input`, `Combat`, `Statuses`, `Projectiles`, `Skills`, `Stats`, entities, `Effects`, `Renderer`, `HUD`, `Log`, `CharacterSelect`, `Game` |
+| `game.js` | Engine: `Utils`, `Input`, `Combat`, `Statuses`, `Projectiles`, `Skills`, `Stats`, entities, monster AI, loot, `Effects`, `Renderer`, `HUD`, `Log`, `CharacterSelect`, `Game` |
+| `js/sfx.js` | Procedural WebAudio sound kit — no audio files, honours the Settings → Sound toggle |
+| `js/data-loot.js` | Per-tier drop tables (coins, potions, materials, equipment) + rarity colours |
 
 ## Designed to expand
 
@@ -255,9 +270,11 @@ phones. `?time=0..1` pins the time of day.
 | Artefact fixes | Terrain culling now keeps heavily foreshortened near cells (no more sky showing through under the camera), the road is fine-segmented so it hugs hills, and the plaza/market/blacksmith/NPC set is limited to the hometown chapter |
 | Performance | Density LOD thins distant scenery deterministically, closed shapes back-face cull, small furniture is near-only, and the Low/Medium/High presets scale prop distance, detail distance, render scale and weather density |
 
-Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈25 ms median** in the hub
-village and **≈25 ms median** in a chapter-1 battle (p90 ≈ 53 ms), chapter-8 boss ≈23 ms. A real
-browser with a GPU-backed canvas is several times faster; the legacy 2D renderer stays under 1 ms.
+Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈21 ms median** in the hub
+village, **≈23 ms median** in a chapter-1 battle and **≈24 ms** on the chapter-8 boss (p75 ≈ 25 ms
+across all three). Combat, the seven-state monster AI and loot rendering added no measurable cost —
+distant monsters simply think on a slower tick. A real browser with a GPU-backed canvas is several
+times faster; the legacy 2D renderer stays under 1 ms.
 
 ### Development tools (`tools/`)
 
@@ -274,6 +291,68 @@ node tools/render-perf.js --stage=c8-5
 
 See `tools/README.md` for every option. These are dev-only scripts: the shipped game keeps its
 zero-dependency, no-build-step rule.
+
+## Combat, AI, loot & death (v0.6-combat)
+
+**Attack loop.** One cooldown source per class (`attackCooldownMs`, shortened by attack-speed
+bonuses) gates every basic attack, so holding the button or tapping repeatedly cannot skip swings.
+Melee classes apply damage in a cone in front of the hero; ranged classes loose their class
+projectile (`arrow`, `fireball`, `icyShard`, `holyBolt`). Every attack checks **range** and
+**line of fire** — `Renderer.blocked()` traces the terrain height field and the solid prop list
+(houses, ruins, wells, big rocks, tree trunks), so nothing lands through a wall, a cliff or a
+building. Point-blank swings always connect so brawling beside a wall still works.
+
+**Targeting.** Tap or click a monster to select it; the pick is a real screen-space test against
+the same camera that drew the frame, so what you touch is what you get. `Tab` cycles the nearest
+living monsters, `Esc` drops the target. The HUD plate (name, level, HP bar, status chips) and the
+3D lock-on reticle follow the selection; with no selection the engine falls back to the nearest
+threat, exactly as before.
+
+**Monster AI.** Each monster runs a small state machine:
+
+| State | Behaviour |
+| --- | --- |
+| `idle` | stands at ease, picks the next thing to do |
+| `patrol` | walks to a random spot inside its spawn radius |
+| `detect` | 0.35s of noticing you (a `!` pops above its head) |
+| `chase` | runs at the hero while inside aggro range *and* line of sight |
+| `attack` | swings on its own cooldown and re-checks reach every frame |
+| `return` | leashed home, regenerating, ignoring you until you re-enter |
+| `death` | plays out, then respawns at its spawn point after `respawnMs` |
+
+Aggro range comes from the enemy data plus an alert bonus; the leash (340 units, 620 for bosses)
+pulls a monster home if it is dragged too far. Monsters steer with `Renderer.resolveMove()`, so
+they walk around cliffs and buildings instead of through them.
+
+**Damage & death.** Damage rolls attacker stats vs defender defence with variance and crits;
+floating numbers show white/yellow for hits and crits and red for damage taken. Deaths fire a
+particle burst, a death animation and a boss sting. Rewards (`+EXP`, `+gold`) are paid **once** per
+life — a `rewarded` flag stops a damage-over-time tick and a swing from double-paying, and it is
+cleared when the monster respawns, so the next life pays again.
+
+**Loot.** `js/data-loot.js` rolls coins, potions, region materials and equipment by tier:
+mobs drop one roll ~80% of the time, elites two, and bosses three including a guaranteed piece of
+equipment. Items appear as rarity-coloured gems on the ground with a label, a glow and a ring;
+drops are placed on dry, walkable ground (never in the lake or inside a prop), pick up when you
+walk within 52 units, and fade after 90 seconds. Coins, potions and materials are credited to the
+signed-in account through `Account.addCoins` / `addPotion` / `addMaterial`; equipment rolls a real
+item into the inventory via `Account.rollItem`.
+
+**Death & respawn.** At 0 HP the hero is knocked down, all attacks are refused (including the
+public API), and after 3 seconds they stand up at the nearest safe ground — the Silverstone gate
+when the fight happened near the hometown, otherwise the class spawn — with full HP and MP and a
+clean bill of health. Stage and arena battles keep using the existing `battle:playerDown` flow.
+
+**Performance.** Monsters further than 420 units from the hero think every other frame, beyond
+900 units every fifth frame (scaled dt keeps their motion smooth). Cooldowns are decremented, not
+recomputed; line-of-sight checks are throttled to ~3/second per monster; loot rendering only
+touches the drops the hero has not collected, and only the nearest four loot labels are drawn.
+
+**Sound.** `js/sfx.js` synthesises every effect with WebAudio oscillators and noise buffers —
+swings, hits, crits, misses, casts, monster deaths, loot pickups, coins, potions, level-ups and
+the death sting. The AudioContext is created on the first user gesture, repeats are throttled per
+sound, and the whole kit turns into a silent no-op when WebAudio is missing or the account's
+Settings → Sound effects switch is off.
 
 ## Cloud accounts — MYTHARA SERVER → DATABASE → Phone · PC · Tablet
 

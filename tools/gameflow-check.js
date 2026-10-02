@@ -114,6 +114,105 @@ process.argv.slice(2).forEach((a) => {
   check('arena bot is present', !!bot, bot ? (bot.kind + ' ' + (bot.name || '')) : 'none');
   h.pump(40);
 
+  // 9. combat systems (Step 7): targeting, AI states, loot, death + respawn
+  h.App.handleAction('battle.leave', {});
+  await h.wait(200);
+  const leaveCard2 = Array.prototype.filter.call(h.doc.querySelectorAll('.modal__card'), function (card) {
+    const title = card.querySelector('.modal__title');
+    return title && /leave/i.test(title.textContent);
+  })[0];
+  if (leaveCard2 && leaveCard2.querySelector('.btn--gold')) leaveCard2.querySelector('.btn--gold').click();
+  await h.wait(240);
+
+  const fighter = h.Game.state.player;
+  fighter.pos.x = 480; fighter.pos.y = 400;
+  const defs = h.Enemies.list();
+  const mobA = h.Game.createEnemy(defs[0], 4, { spawn: { x: fighter.pos.x + 150, y: fighter.pos.y }, noSpawnDelay: true });
+  const mobB = h.Game.createEnemy(defs[1], 4, { spawn: { x: fighter.pos.x - 170, y: fighter.pos.y + 40 }, noSpawnDelay: true });
+  h.Game.spawnEnemies([mobA, mobB]);
+  h.pump(3);
+
+  h.Game.selectTarget(mobA);
+  check('target selection', h.Game.target() === mobA && h.Game.state.monster === mobA,
+    mobA.name + ' picked');
+  const cycled = h.Game.cycleTarget(false);
+  check('target cycling', !!cycled && cycled !== mobA, cycled ? cycled.name : 'none');
+  h.Game.selectTarget(mobB);
+
+  const mobHp0 = mobB.hp;
+  h.Game.hitMonster(fighter, mobB, { silent: true });
+  check('damage + hit reaction', mobB.hp < mobHp0 && mobB.hitFlash > 0 && mobB.aggro === true,
+    mobHp0 + ' → ' + mobB.hp);
+
+  // the AI must react to the fighter standing next to it
+  h.pump(90);
+  check('monster AI engages', ['chase', 'attack', 'detect'].indexOf(mobB.ai.state) !== -1 && mobB.aggro,
+    'state ' + mobB.ai.state);
+
+  // death pays out exactly once, drops loot, and loot is collectable
+  let droppedCount = 0;
+  let pickedCount = 0;
+  h.win.MytharaCore.Bus.on('loot:dropped', function (payload) { droppedCount += payload.loot.length; });
+  h.win.MytharaCore.Bus.on('loot:pickup', function () { pickedCount += 1; });
+  const goldBefore = fighter.gold, expBefore = fighter.exp;
+  mobB.hp = 1;
+  h.Game.hitMonster(fighter, mobB, { silent: true });
+  const goldAfter = fighter.gold, expAfter = fighter.exp;
+  const drops = h.Game.loot().filter(function (l) { return l.picked !== true; });
+  check('kill rewards exp/gold', !mobB.alive && (goldAfter > goldBefore || expAfter > expBefore),
+    '+' + (goldAfter - goldBefore) + ' gold · +' + (expAfter - expBefore) + ' exp');
+  const respawnTimerAtDeath = mobB.respawnTimer;
+  h.Game.hitMonster(fighter, mobB, { silent: true });
+  check('no duplicate rewards', fighter.gold === goldAfter && fighter.exp === expAfter);
+
+  // a single mob only drops ~80% of the time, so kill a handful before judging
+  const extra = [];
+  for (let i = 0; i < 5; i++) {
+    extra.push(h.Game.createEnemy(defs[(i + 2) % defs.length], 4, {
+      spawn: { x: 200 + i * 30, y: 330 + (i % 2) * 24 }, noSpawnDelay: true
+    }));
+  }
+  h.Game.spawnEnemies(extra);
+  h.pump(2);
+  extra.forEach(function (m) { m.hp = 1; h.Game.hitMonster(fighter, m, { silent: true }); });
+  h.pump(2);
+  const remaining = h.Game.loot().filter(function (l) { return l.picked !== true; });
+  check('loot drops on death', droppedCount > 0, droppedCount + ' drop(s) from 6 kills');
+  if (remaining.length) {
+    const drop = remaining[0];
+    fighter.pos.x = drop.x; fighter.pos.y = drop.y;
+    h.pump(4);
+    check('loot pickup', pickedCount > 0 && h.Game.loot().indexOf(drop) === -1, drop.name + ' collected');
+  } else {
+    check('loot pickup', pickedCount > 0, 'collected on walk-over');
+  }
+
+  // player death → respawn at a legal, quiet spot with combat suspended
+  fighter.pos.x = 700; fighter.pos.y = 330; fighter.hp = 0;
+  h.Game.knockDownPlayer(fighter);
+  fighter.attackCooldown = 0;
+  const mobHp1 = mobA.hp;
+  h.attack(); h.pump(3); h.key('Space', false);          // real input path while downed
+  check('combat paused while downed', fighter.downed && mobA.hp === mobHp1 && fighter.attackCooldown === 0);
+  h.pump(260);
+  const spotLegal = !h.Render3D.resolveMove(fighter.pos.x, fighter.pos.y, fighter.pos.x, fighter.pos.y, 16).blocked;
+  check('respawn after death', !fighter.downed && fighter.hp > 0 && spotLegal,
+    Math.round(fighter.hp) + '/' + fighter.maxHp + ' at ' + Math.round(fighter.pos.x) + ',' + Math.round(fighter.pos.y));
+
+  // a dead monster comes back on its timer, at home, with rewards armed again
+  // it respawns at home, then may immediately hunt the hero again — so allow
+  // it a short leash around its spawn point
+  const backHome = Math.hypot(mobB.pos.x - mobB.home.x, mobB.pos.y - mobB.home.y);
+  check('monster respawns after death',
+    respawnTimerAtDeath > 0 && mobB.alive && mobB.hp === mobB.maxHp &&
+    backHome < 120 && mobB.rewarded === false,
+    respawnTimerAtDeath.toFixed(1) + 's timer · ' + Math.round(backHome) + ' units from spawn');
+  mobB.hp = 1;
+  const goldAgain = fighter.gold;
+  h.Game.hitMonster(fighter, mobB, { silent: true });
+  check('respawned monster pays again', !mobB.alive && fighter.gold >= goldAgain,
+    '+' + (fighter.gold - goldAgain) + ' gold from the respawn');
+
   const failed = steps.filter((s) => !s.ok);
   const report = {
     passed: steps.length - failed.length,

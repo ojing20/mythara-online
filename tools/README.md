@@ -73,7 +73,9 @@ node tools/gameflow-check.js
 
 Boots the real game headlessly and drives the real systems: register, character creation, class
 locks, stage unlock/start, attack damage through the real key path, skill cast, potion, battle
-exit, every menu, save/reload and an arena bot duel. Currently **15/15 checks pass**.
+exit, every menu, save/reload and an arena bot duel. Currently **27/27 checks pass**
+(register → character → stage → combat → targeting → AI → kill rewards → loot → death →
+respawn → respawned monsters → save/reload → arena duel).
 
 ## render-perf.js — frame cost
 
@@ -88,8 +90,8 @@ actors, flush, weather, labels, post) and a `fills/frame by layer` line (props, 
 actors, road) for spotting hot layers. The 3D renderer is a software rasteriser, so these numbers
 are a CPU-only baseline: a real browser with a GPU-backed canvas is several times faster.
 
-Current baseline in the hub village: ≈25 ms median / p90 53 ms; chapter-1 battle: ≈25 ms median /
-p90 53 ms; chapter-8 boss ≈23 ms (960×540, high quality, `--frames=60`). The p90/max figures include V8 GC pauses; the
+Current baseline in the hub village: ≈21 ms median / p75 24 ms; chapter-1 battle: ≈23 ms median;
+chapter-8 boss ≈24 ms (960×540, high quality, `--frames=60`). The p90/max figures include V8 GC pauses; the
 section breakdown excludes them.
 
 ## Notes

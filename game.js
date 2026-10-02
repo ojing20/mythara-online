@@ -30,6 +30,8 @@
   const ZONE = DATA.ZONES[DATA.activeZone];
   const MONSTER_DEF = DATA.MONSTERS[DATA.activeMonster];
   const WORLD = CONFIG.world;
+  /** Procedural sound kit (js/sfx.js); a silent stub keeps the engine safe without it. */
+  const Sfx = root.MytharaSFX || { play: function () { return false; } };
 
   /** How enemy stats grow with stage level (see data-enemies.js for bases). */
   const ENEMY_SCALING = {
@@ -128,6 +130,7 @@
 
     let attackHeld = false;
     let attackQueued = false;
+    let specialKey = null;      // engine hook for Tab / Esc
     let bound = false;
     const listeners = { attack: [] };
 
@@ -188,6 +191,11 @@
         if (ATTACK_KEYS[event.code]) {
           setAttackHeld(true);
           event.preventDefault();
+        }
+        // Tab / Esc reach the engine through a hook it installs itself,
+        // so the Input module stays free of game-state dependencies.
+        if (specialKey && !(event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName || ''))) {
+          specialKey(event);
         }
       });
 
@@ -269,6 +277,12 @@
         canvas.addEventListener('pointerdown', function (event) {
           setAttackHeld(true);
           claim(canvas, event);
+          // A tap that lands on a monster selects it (see Game.pickTargetAt);
+          // every other tap is a plain attack, exactly as before.
+          if (event.clientX !== undefined && canvas.getBoundingClientRect) {
+            const rect = canvas.getBoundingClientRect();
+            emit('canvasPick', { x: event.clientX - rect.left, y: event.clientY - rect.top });
+          }
           if (event.cancelable) event.preventDefault();
         });
         ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (type) {
@@ -287,6 +301,7 @@
     return {
       axis: axis,
       isDown: isDown,
+      onSpecialKey: function (fn) { specialKey = typeof fn === 'function' ? fn : null; },
       setDirection: setDirection,
       clearDirections: clearDirections,
       queueAttack: queueAttack,
@@ -876,6 +891,19 @@
       aggro: opts.aggro !== false,
       wanderTarget: { x: spawn.x, y: spawn.y },
       wanderTimer: Utils.randRange(0.4, 1.6),
+      // No enemy record carries attackCooldownMs, so derive a sane swing rate
+      // from the tier — otherwise the counter goes NaN and a monster swings
+      // once, then stands there forever.
+      attackCooldownMs: Math.round((def.attackCooldownMs ||
+        (def.tier === 'boss' ? 2200 : def.tier === 'elite' ? 1800 : 1500)) *
+        Utils.randRange(0.9, 1.12)),
+      // --- AI: patrol radius, leash and a reaction delay before committing ---
+      ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
+      aiOffset: Utils.randInt(0, 4),
+      leash: def.leashRange || (def.boss || def.tier === 'boss' ? 620 : 340),
+      detectTimer: 0,
+      losTimer: Utils.randRange(0, 0.4),
+      patrolTarget: null,
       attackCooldown: 0,
       attackAnim: 0,
       hitFlash: 0,
@@ -910,6 +938,13 @@
       aggro: false,
       wanderTarget: { x: def.spawn.x, y: def.spawn.y },
       wanderTimer: Utils.randRange(0.4, 1.6),
+      attackCooldownMs: Math.round((def.attackCooldownMs || 1500) * Utils.randRange(0.9, 1.12)),
+      ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
+      aiOffset: Utils.randInt(0, 4),
+      leash: def.leashRange || 340,
+      detectTimer: 0,
+      losTimer: Utils.randRange(0, 0.4),
+      patrolTarget: null,
       attackCooldown: 0,
       attackAnim: 0,
       hitFlash: 0,
@@ -2741,6 +2776,28 @@
       render: render,
       setPalette: setPalette,
       drawHero: drawHero,
+      /** Screen-space monster pick (3D presentation layer only). */
+      pickAt: function (x, y, gameState) {
+        if (!ctx.use3d || !root.MytharaRender3D || !root.MytharaRender3D.pickAt) return null;
+        return root.MytharaRender3D.pickAt(x, y, gameState);
+      },
+      /** Terrain / building line of fire, or false in the flat 2D fallback. */
+      blocked: function (ax, ay, bx, by) {
+        if (!ctx.use3d || !root.MytharaRender3D || !root.MytharaRender3D.blocked) return false;
+        return root.MytharaRender3D.blocked(ax, ay, bx, by);
+      },
+      /** Water depth at a world point (0 in the flat 2D fallback). */
+      waterDepth: function (x, y) {
+        if (!ctx.use3d || !root.MytharaRender3D || !root.MytharaRender3D.waterDepth) return 0;
+        return root.MytharaRender3D.waterDepth(x, y);
+      },
+      /** Slide a circle around cliffs and solid props (no-op in 2D mode). */
+      resolveMove: function (fromX, fromY, toX, toY, radius) {
+        if (!ctx.use3d || !root.MytharaRender3D || !root.MytharaRender3D.resolveMove) {
+          return { x: toX, z: toY, blocked: false };
+        }
+        return root.MytharaRender3D.resolveMove(fromX, fromY, toX, toY, radius);
+      },
       context2d: function () { return ctx.ctx2d; },
       getBackground: function () { return ctx.background; }
     };
@@ -3490,8 +3547,10 @@
       screen: 'select',      // 'select' | 'game'
       time: 0,
       player: null,
-      monster: null,         // primary target (nearest alive monster)
+      monster: null,         // primary target shown by the HUD
+      target: null,          // explicitly selected monster (tap / Tab)
       monsters: [],          // every monster in the zone
+      loot: [],              // dropped items lying in the world
       character: null,       // { classId, name }
       mode: 'free',          // 'free' | 'stage' | 'boss' | 'arena'
       battle: null,          // battle context supplied by js/battle.js
@@ -3553,6 +3612,7 @@
       if (opts.equipmentBonus) state.player.equipmentBonus = opts.equipmentBonus;
       if (opts.maxHpBonus || opts.maxMpBonus) state.player.flatBonus = { maxHp: opts.maxHpBonus || 0, maxMp: opts.maxMpBonus || 0 };
       Projectiles.clear();
+      state.loot = [];
       createMonsters();
       Effects.reset();
 
@@ -3683,6 +3743,18 @@
 
       Input.bindKeyboard(root);
       Input.bindControls(doc, doc.getElementById('game-canvas'));
+      on('canvasPick', function (payload) { pickTargetAt(payload.x, payload.y); });
+      on('targetCycle', function (payload) { cycleTarget(payload && payload.reverse); });
+      on('targetClear', function () { clearTarget(); });
+      Input.onSpecialKey(function (event) {
+        if (state.screen !== 'game') return;
+        if (event.code === 'Tab') {
+          cycleTarget(!!event.shiftKey);
+          if (event.cancelable) event.preventDefault();
+        } else if (event.code === 'Escape') {
+          clearTarget();
+        }
+      });
       bindSkillControls(doc);
 
       Effects.reset();
@@ -3810,6 +3882,7 @@
       updateMonsters(dt);
       checkBattleProgress();
       updateProjectiles(dt);
+      updateLoot(dt);
       Skills.tick(player, dt);
       updateRegen(player, dt);
       Effects.update(dt);
@@ -3860,8 +3933,10 @@
 
       if (axis.active) {
         const step = player.speed * Statuses.speedMultiplier(player) * dt;
-        player.pos.x += axis.x * step;
-        player.pos.y += axis.y * step;
+        const solved = Renderer.resolveMove(player.pos.x, player.pos.y,
+          player.pos.x + axis.x * step, player.pos.y + axis.y * step, player.radius);
+        player.pos.x = solved.x;
+        player.pos.y = solved.z;
         player.facing.x = axis.x;
         player.facing.y = axis.y;
         player.walkPhase += dt * 9;
@@ -3947,13 +4022,98 @@
       });
     }
 
+    /* ---------- targeting ---------- */
+
+    /** How far a selected target stays selected while it is alive. */
+    const TARGET_KEEP_RANGE = 1100;
+    const TARGET_MELEE_LEASH = 60;
+
+    function isValidTarget(monster) {
+      if (!monster || !monster.alive) return false;
+      if ((state.monsters || []).indexOf(monster) === -1) return false;
+      const player = state.player;
+      if (!player) return false;
+      return Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y) <= TARGET_KEEP_RANGE;
+    }
+
+    /** Public: choose a monster as the active target. */
+    function selectTarget(monster, options) {
+      const opts = options || {};
+      if (!monster || !monster.alive) return false;
+      if (state.target === monster) return true;
+      state.target = monster;
+      state.monster = monster;
+      HUD.render(state);
+      if (!opts.silent) {
+        Sfx.play('select');
+        Effects.addFloater(monster.pos.x, monster.pos.y - 74, monster.name + ' targeted', {
+          color: '#ffd76a', size: 12, life: 700
+        });
+        emit('targetSelected', { monster: monster });
+      }
+      return true;
+    }
+
+    function clearTarget() {
+      if (!state.target) return false;
+      state.target = null;
+      emit('targetCleared', {});
+      return true;
+    }
+
+    /** Tab / T: cycle through the living monsters nearest-first. */
+    function cycleTarget(reverse) {
+      const player = state.player;
+      if (!player) return null;
+      const list = (state.monsters || []).filter(function (m) { return m.alive; })
+        .filter(function (m) {
+          return Utils.distance(m.pos.x, m.pos.y, player.pos.x, player.pos.y) <= TARGET_KEEP_RANGE;
+        })
+        .sort(function (a, b) {
+          return Utils.distance(a.pos.x, a.pos.y, player.pos.x, player.pos.y) -
+            Utils.distance(b.pos.x, b.pos.y, player.pos.x, player.pos.y);
+        });
+      if (!list.length) { clearTarget(); return null; }
+      const index = list.indexOf(state.target);
+      const step = reverse ? -1 : 1;
+      const next = list[(index + step + list.length + (index === -1 ? 1 : 0)) % list.length] || list[0];
+      selectTarget(next, { silent: false });
+      return next;
+    }
+
+    /** The target the player is acting on: their pick, else the nearest threat. */
+    function currentTarget(maxDistance) {
+      if (isValidTarget(state.target)) return state.target;
+      return nearestMonster(state.player ? state.player.pos.x : 0, state.player ? state.player.pos.y : 0, maxDistance);
+    }
+
+    /** Screen tap → monster. Returns the picked monster (or null). */
+    function pickTargetAt(x, y) {
+      const picked = Renderer.pickAt(x, y, state);
+      if (!picked) return null;
+      if (state.screen !== 'game') return null;
+      return selectTarget(picked) ? picked : null;
+    }
+
+    /**
+     * Line of fire between the player and a monster. Point-blank swings always
+     * connect, so brawling next to a wall keeps working.
+     */
+    function lineOfSight(from, to) {
+      const reach = Utils.distance(from.pos.x, from.pos.y, to.pos.x, to.pos.y);
+      if (reach <= (from.radius || 16) + (to.radius || 16) + TARGET_MELEE_LEASH) return true;
+      return !Renderer.blocked(from.pos.x, from.pos.y, to.pos.x, to.pos.y);
+    }
+
     /* ---------- attacks ---------- */
     /** Basic attack: melee classes swing, ranged classes loose a projectile. */
     function playerBasicAttack(player) {
+      if (!player || player.downed) return;      // no combat while the hero is down
       player.attackCooldown = player.attackCooldownMs;
       player.attackAnim = 1;
       player.attackKind = player.attackType;
       Anim.set(player, 'attack', { durationMs: Math.min(420, player.attackCooldownMs) });
+      Sfx.play('swing');
       emit('playerAttack', { player: player });
 
       if (player.attackType === 'ranged') rangedBasicAttack(player);
@@ -3965,10 +4125,20 @@
     }
 
     function meleeBasicAttack(player) {
-      const target = nearestMonster(player.pos.x, player.pos.y, player.attackRange + player.radius + 60);
+      const reach = player.attackRange + player.radius + 60;
+      // the player's chosen target wins when it is in reach, otherwise the nearest
+      let target = currentTarget(reach);
+      if (target && !Combat.inRange(player, target, player.attackRange)) {
+        const close = nearestMonster(player.pos.x, player.pos.y, reach);
+        if (close && close !== target && Combat.inRange(player, close, player.attackRange)) target = close;
+      }
       if (!target || !Combat.inRange(player, target, player.attackRange)) {
         // report "Too far!" whenever a monster exists, even if it is way out of reach
         showAttackFeedback(player, nearestMonster(player.pos.x, player.pos.y, Infinity));
+        return;
+      }
+      if (!lineOfSight(player, target)) {
+        Effects.addFloater(target.pos.x, target.pos.y - 70, 'No line of sight', { color: '#ffd0a0', size: 12, life: 700 });
         return;
       }
       hitMonster(player, target, {
@@ -3983,7 +4153,20 @@
     function rangedBasicAttack(player) {
       const def = DATA.PROJECTILES[(player.classDef && player.classDef.basicProjectile) || 'arrow'];
       if (!def) return;
-      const target = nearestMonster(player.pos.x, player.pos.y, player.autoTargetRange || 99999);
+      const rangeLimit = player.autoTargetRange || 99999;
+      const selected = isValidTarget(state.target) ? state.target : null;
+      const target = currentTarget(rangeLimit);
+      // A picked target that is out of reach is a range failure, not a licence
+      // to loose arrows into the scenery.
+      if (selected && !Combat.inRange(player, selected, rangeLimit)) {
+        showAttackFeedback(player, selected);
+        return;
+      }
+      if (selected && !target) { showAttackFeedback(player, selected); return; }
+      if (target && !lineOfSight(player, target)) {
+        Effects.addFloater(target.pos.x, target.pos.y - 70, 'No line of sight', { color: '#ffd0a0', size: 12, life: 700 });
+        return;
+      }
       const angle = target
         ? Math.atan2(target.pos.y - player.pos.y, target.pos.x - player.pos.x)
         : Math.atan2(player.facing.y, player.facing.x);
@@ -4044,6 +4227,7 @@
       monster.hp = Math.max(0, monster.hp - result.damage);
       monster.hitFlash = 1;
       monster.aggro = true;
+      Sfx.play(result.crit ? 'crit' : 'hit');
       if (!monster.telegraphMs) Anim.set(monster, 'hurt');
 
       const source = opts.source || 'player';
@@ -4102,10 +4286,14 @@
         return false;
       }
 
-      const target = nearestMonster(player.pos.x, player.pos.y, 520);
+      const target = currentTarget(520);
       const needsTarget = skill.kind === 'meleeStrike' || skill.kind === 'inflict';
       if (needsTarget && (!target || !Combat.inRange(player, target, player.attackRange + 24))) {
         Effects.addFloater(player.pos.x, player.pos.y - 64, 'No target in range', { color: '#e6e1ff', size: 12, life: 700 });
+        return false;
+      }
+      if (target && !lineOfSight(player, target)) {
+        Effects.addFloater(target.pos.x, target.pos.y - 70, 'No line of sight', { color: '#ffd0a0', size: 12, life: 700 });
         return false;
       }
 
@@ -4115,6 +4303,7 @@
       player.attackAnim = 1;
       player.attackKind = 'cast';
       Anim.set(player, skill.ultimate ? 'ultimate' : 'skill', { durationMs: skill.ultimate ? 1500 : 720 });
+      Sfx.play('cast');
       applySkillEffect(player, skill, target);
       Log.push(player.name + ' uses ' + skill.name + '.', 'log--level');
       emit('skillCast', { player: player, skill: skill, target: target });
@@ -4350,6 +4539,10 @@
     }
 
     function killMonster(monster, attacker) {
+      // A DoT tick and a swing can land in the same frame — the first death
+      // wins, so exp/gold/loot can never be paid out twice for one kill.
+      if (!monster.alive || monster.rewarded) return null;
+      monster.rewarded = true;
       monster.alive = false;
       monster.aggro = false;
       monster.deathTimer = 0.4;
@@ -4357,18 +4550,25 @@
       monster.attackCooldown = 0;
       Anim.set(monster, 'death');
       if (monster.isDuelist) { emit('arena:botDown', { duelist: monster }); }
+      Sfx.play(monster.isBoss ? 'boss' : 'death');
 
       const burstColor = (monster.def && monster.def.palette && monster.def.palette.body) || '#c9b2ff';
       Effects.burst(monster.pos.x, monster.pos.y, burstColor, 22, { speedMax: 200, lift: 80 });
       Effects.addShake(6);
 
-      const rewards = monster.def.rewards || { exp: 0, goldMin: 0, goldMax: 0 };
-      const expGain = rewards.exp || 0;
-      const goldGain = Utils.randInt(rewards.goldMin || 0, rewards.goldMax || 0);
+      const rewards = (monster.def && monster.def.rewards) || null;
+      const expGain = (rewards && rewards.exp) || monster.xp || 0;
+      const goldGain = rewards && rewards.goldMin !== undefined
+        ? Utils.randInt(rewards.goldMin || 0, rewards.goldMax || 0)
+        : (monster.coins || 0);
 
       state.player.kills += 1;
-      state.player.gold += goldGain;
-      state.player.exp += expGain;
+      // Stage/boss/arena fights pay through battle.js's reward sink; out in the
+      // world the kill pays the hero directly.
+      if (typeof state.rewardSink !== 'function') {
+        state.player.gold += goldGain;
+        state.player.exp += expGain;
+      }
       if (attacker && attacker.kind === 'player') Skills.addRage(attacker, 12);
       Statuses.clear(monster);
 
@@ -4389,29 +4589,192 @@
 
       Log.push(monster.name + ' defeated! +' + expGain + ' EXP, +' + goldGain + ' gold.', 'log--kill');
       emit('monsterKilled', { monster: monster, exp: expGain, gold: goldGain });
+      if (!monster.isDuelist) dropLoot(monster);
       checkLevelUp(state.player);
+      return { exp: expGain, gold: goldGain };
+    }
+
+    /* ---------- loot ---------- */
+    const LOOT_PICKUP_RADIUS = 52;
+    const LOOT_LIFETIME = 90;          // seconds before a drop fades away
+    const LOOT_MAX = 40;
+
+    /** Is this spot dry land the player can stand on? */
+    function dryGround(x, y) {
+      if (Renderer.waterDepth && Renderer.waterDepth(x, y) > 0.06) return false;
+      const solved = Renderer.resolveMove(x, y, x, y, 12);
+      return !solved.blocked;
+    }
+
+    /** Find a legal spot for a drop near where the monster fell. */
+    function lootSpot(x, y) {
+      if (dryGround(x, y)) return { x: x, y: y };
+      for (let i = 0; i < 10; i++) {
+        const angle = (i / 10) * Math.PI * 2;
+        const radius = 26 + i * 6;
+        const sx = x + Math.cos(angle) * radius;
+        const sy = y + Math.sin(angle) * radius * 0.7;
+        if (!isInsideWorld(sx, sy)) continue;
+        if (dryGround(sx, sy)) return { x: sx, y: sy };
+      }
+      const fallback = Renderer.resolveMove(x, y, x, y, 12);
+      return { x: fallback.x, y: fallback.z };
+    }
+
+    function isInsideWorld(x, y) {
+      const top = WORLD.floorTop || WORLD.margin;
+      return x > WORLD.margin && x < WORLD.width - WORLD.margin && y > top && y < WORLD.height - WORLD.margin;
+    }
+
+    /** Turn a kill into drops on the ground. */
+    function dropLoot(monster) {
+      const data = root.MytharaLootData;
+      if (!data) return [];
+      const rolled = data.roll(monster, monster.level, Utils.random);
+      if (!rolled.length) return [];
+      const spot = lootSpot(monster.pos.x, monster.pos.y);
+      const dropped = [];
+      rolled.forEach(function (drop, index) {
+        if (state.loot.length >= LOOT_MAX) state.loot.shift();
+        const angle = (index / Math.max(1, rolled.length)) * Math.PI * 2 + Utils.randRange(-0.4, 0.4);
+        const spread = rolled.length > 1 ? 16 + index * 9 : 0;
+        const entry = {
+          uid: 'loot' + Math.round(state.time * 1000) + '_' + index,
+          kind: drop.kind,
+          id: drop.id,
+          name: drop.name,
+          rarity: drop.rarity,
+          colour: drop.colour,
+          glyph: drop.glyph,
+          amount: drop.amount,
+          x: Utils.clamp(spot.x + Math.cos(angle) * spread, WORLD.margin + 6, WORLD.width - WORLD.margin - 6),
+          y: Utils.clamp(spot.y + Math.sin(angle) * spread * 0.7, (WORLD.floorTop || WORLD.margin) + 4, WORLD.height - WORLD.margin - 4),
+          bob: Utils.randRange(0, Math.PI * 2),
+          age: 0,
+          picked: false
+        };
+        state.loot.push(entry);
+        dropped.push(entry);
+      });
+      emit('loot:dropped', { monster: monster, loot: dropped });
+      return dropped;
+    }
+
+    /** Award one drop to the hero (and the saved account when available). */
+    function collectLoot(entry) {
+      if (!entry || entry.picked) return null;
+      entry.picked = true;
+      const player = state.player;
+      const Account = root.MytharaAccount && root.MytharaAccount.Account;
+      const ready = !!(Account && Account.isReady && Account.isReady());
+      let label = entry.name;
+
+      if (entry.kind === 'coins') {
+        player.gold += entry.amount;
+        if (ready && Account.addCoins) Account.addCoins(entry.amount);
+        Sfx.play('coin');
+        label = '+' + entry.amount + ' gold';
+      } else if (entry.kind === 'potion') {
+        player.potions = player.potions || {};
+        player.potions[entry.id] = (player.potions[entry.id] || 0) + entry.amount;
+        if (ready && Account.addPotion) Account.addPotion(entry.id, entry.amount);
+        Sfx.play('potion');
+        label = '+' + entry.name;
+      } else if (entry.kind === 'material') {
+        player.materials = player.materials || {};
+        player.materials[entry.id] = (player.materials[entry.id] || 0) + entry.amount;
+        if (ready && Account.addMaterial) Account.addMaterial(entry.id, entry.amount);
+        Sfx.play('loot');
+        label = '+' + entry.amount + ' ' + entry.name;
+      } else {
+        let item = null;
+        if (ready && Account.rollItem) item = Account.rollItem({ minRarity: entry.rarity });
+        if (item) label = '+' + item.name;
+        else {
+          player.lootBag = player.lootBag || [];
+          player.lootBag.push({ kind: 'item', rarity: entry.rarity });
+          label = '+' + entry.name;
+        }
+        Sfx.play('loot');
+      }
+
+      Effects.addFloater(entry.x, entry.y - 34, label, {
+        color: entry.colour || '#f2c14e', size: entry.kind === 'item' ? 15 : 13, life: 1100, vy: -30
+      });
+      Effects.burst(entry.x, entry.y, entry.colour || '#f2c14e', entry.kind === 'item' ? 12 : 6,
+        { speedMax: 90, lift: 40 });
+      Log.push('Picked up ' + label.replace(/^\+/, '').trim() + '.', 'log--loot');
+      emit('loot:pickup', { loot: entry, label: label });
+      return entry;
+    }
+
+    /** Walk-over pickup plus ageing. */
+    function updateLoot(dt) {
+      const player = state.player;
+      if (!state.loot.length) return;
+      for (let i = state.loot.length - 1; i >= 0; i--) {
+        const entry = state.loot[i];
+        if (entry.picked) { state.loot.splice(i, 1); continue; }
+        entry.age += dt;
+        const distance = Utils.distance(entry.x, entry.y, player.pos.x, player.pos.y);
+        if (!player.downed && distance <= LOOT_PICKUP_RADIUS) {
+          collectLoot(entry);
+          state.loot.splice(i, 1);
+          continue;
+        }
+        if (entry.age > LOOT_LIFETIME) {
+          state.loot.splice(i, 1);
+          emit('loot:expired', { loot: entry });
+        }
+      }
+    }
+
+    /** Public: pick up the nearest drop (used by tests and touch helpers). */
+    function pickupLoot(entry) {
+      const target = entry || state.loot.filter(function (l) { return !l.picked; })[0];
+      return collectLoot(target);
     }
 
     /* ---------- monster AI ---------- */
+    let aiTick = 0;
+    /**
+     * Distance LOD: monsters near the player think every frame, ones further
+     * away every 2nd–5th frame, so a busy zone never costs a full AI pass.
+     */
+    function aiStride(monster, player) {
+      const d = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
+      if (d < 420) return 1;
+      if (d < 900) return 2;
+      return 5;
+    }
+
     function updateMonsters(dt) {
-      (state.monsters || []).forEach(function (monster) { updateMonster(monster, dt); });
-      // primary target for the HUD: nearest alive monster, else the first one
-      state.monster = nearestMonster(state.player.pos.x, state.player.pos.y, Infinity) ||
-        (state.monsters || [])[0] || null;
+      aiTick += 1;
+      const player = state.player;
+      (state.monsters || []).forEach(function (monster) {
+        if (!monster.alive) { updateMonster(monster, dt); return; }
+        const stride = aiStride(monster, player);
+        if (stride > 1 && (aiTick + (monster.aiOffset || 0)) % stride !== 0) return;
+        updateMonster(monster, dt * stride);
+      });
+      // primary target for the HUD: the player's pick, else the nearest one
+      state.monster = currentTarget(Infinity) || (state.monsters || [])[0] || null;
     }
 
     function updateMonster(monster, dt) {
       if (!monster) return;
 
       if (!monster.alive) {
-        monster.respawnTimer -= dt;
-        if (monster.respawnTimer <= 0) respawnMonster(monster);
+        if (state.mode === 'free' && !monster.isDuelist) {
+          monster.respawnTimer -= dt;
+          if (monster.respawnTimer <= 0) respawnMonster(monster);
+        }
         return;
       }
 
       monster.hitFlash = Math.max(0, monster.hitFlash - dt * 3.2);
       monster.attackAnim = Math.max(0, monster.attackAnim - dt * 3);
-      monster.attackCooldown = Math.max(0, monster.attackCooldown - dt * 1000);
+      monster.attackCooldown = Math.max(0, (monster.attackCooldown || 0) - dt * 1000);
       monster.spawnPulse = Math.max(0, monster.spawnPulse - dt * 2);
 
       const player = state.player;
@@ -4452,26 +4815,119 @@
       const speedMultiplier = Statuses.speedMultiplier(monster);
       const hidden = Skills.isStealthed(player);
       const distanceToPlayer = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
+      const homeDistance = Utils.distance(monster.pos.x, monster.pos.y, monster.home.x, monster.home.y);
       const aggroRange = monster.isBoss ? 900 : effectiveAggroRange(monster);
+      const leash = monster.leash || 340;
+      const reach = monster.radius + player.radius + (monster.def.attackRange || 14);
+      const ai = monster.ai || (monster.ai = { state: 'idle', timer: 0.6 });
 
-      if (player.downed || hidden || distanceToPlayer > aggroRange) {
+      // Line of sight is only needed to start a chase; checking it a few times
+      // a second keeps detection honest without paying for it every frame.
+      monster.losTimer = (monster.losTimer || 0) - dt;
+      if (monster.losTimer <= 0 || ai.state === 'idle' || ai.state === 'patrol') {
+        monster.losTimer = 0.35;
+        monster.canSee = player.downed || hidden ? false : lineOfSight(monster, player);
+      }
+      const playerVisible = !player.downed && !hidden && distanceToPlayer <= aggroRange && monster.canSee !== false;
+      const angry = ai.state === 'chase' || ai.state === 'attack';
+
+      const goHome = function () {
+        ai.state = 'return';
+        ai.timer = 0;
         monster.aggro = false;
-        Anim.set(monster, 'walk');
-        wander(monster, dt, speedMultiplier);
-      } else {
-        monster.aggro = true;
-        const reach = monster.radius + player.radius + (monster.def.attackRange || 14);
-        monster.facing = { x: player.pos.x - monster.pos.x, y: player.pos.y - monster.pos.y };
-        if (distanceToPlayer > reach) {
-          const chasing = monster.speed * speedMultiplier * (1 + (monster.enrage || 0)) * dt;
-          moveToward(monster, player.pos.x, player.pos.y, chasing);
-          if (!Anim.isBusy(monster)) Anim.set(monster, distanceToPlayer > 220 ? 'run' : 'walk');
-        } else if (monster.attackCooldown <= 0) {
-          monsterAttack(monster, player);
+      };
+
+      switch (ai.state) {
+        case 'idle':
+          if (playerVisible) {
+            ai.state = 'detect';
+            ai.timer = monster.isBoss ? 0.2 : 0.35;
+            monster.aggro = true;
+            Effects.addFloater(monster.pos.x, monster.pos.y - 78, '!', { color: '#ffd76a', size: 18, life: 620, vy: -26 });
+          } else if (homeDistance > 26) {
+            goHome();
+          } else {
+            ai.timer -= dt;
+            if (ai.timer <= 0) {
+              ai.state = 'patrol';
+              ai.timer = Utils.randRange(1.6, 3.4);
+              const angle = Utils.randRange(0, Math.PI * 2);
+              const radius = Utils.randRange(18, Math.max(24, monster.def.wanderRadius || 70));
+              monster.patrolTarget = { x: monster.home.x + Math.cos(angle) * radius, y: monster.home.y + Math.sin(angle) * radius * 0.7 };
+            }
+          }
+          break;
+
+        case 'patrol': {
+          if (playerVisible) {
+            ai.state = 'detect';
+            ai.timer = monster.isBoss ? 0.2 : 0.35;
+            monster.aggro = true;
+            Effects.addFloater(monster.pos.x, monster.pos.y - 78, '!', { color: '#ffd76a', size: 18, life: 620, vy: -26 });
+            break;
+          }
+          ai.timer -= dt;
+          const target = monster.patrolTarget;
+          if (!target || ai.timer <= 0) { ai.state = 'idle'; ai.timer = Utils.randRange(0.6, 1.8); break; }
+          const gap = Utils.distance(monster.pos.x, monster.pos.y, target.x, target.y);
+          if (gap < 8) { ai.state = 'idle'; ai.timer = Utils.randRange(0.8, 2.2); break; }
+          stepMonster(monster, target.x, target.y, monster.speed * 0.42 * speedMultiplier * dt);
+          if (!Anim.isBusy(monster)) Anim.set(monster, 'walk');
+          break;
         }
+
+        case 'detect':
+          monster.aggro = true;
+          monster.facing = { x: player.pos.x - monster.pos.x, y: player.pos.y - monster.pos.y };
+          ai.timer -= dt;
+          if (!playerVisible) { ai.state = 'idle'; ai.timer = 0.4; monster.aggro = false; break; }
+          if (ai.timer <= 0) ai.state = 'chase';
+          break;
+
+        case 'chase':
+        case 'attack':
+          monster.aggro = true;
+          if (player.downed || hidden || homeDistance > leash) {
+            goHome();
+            break;
+          }
+          monster.facing = { x: player.pos.x - monster.pos.x, y: player.pos.y - monster.pos.y };
+          if (distanceToPlayer > reach) {
+            const chasing = monster.speed * speedMultiplier * (1 + (monster.enrage || 0)) * dt;
+            stepMonster(monster, player.pos.x, player.pos.y, chasing);
+            if (!Anim.isBusy(monster)) Anim.set(monster, distanceToPlayer > 220 ? 'run' : 'walk');
+            ai.state = 'chase';
+          } else {
+            ai.state = 'attack';
+            if (monster.attackCooldown <= 0) monsterAttack(monster, player);
+          }
+          break;
+
+        case 'return': {
+          monster.aggro = false;
+          if (playerVisible && homeDistance < leash * 0.6) {
+            ai.state = 'detect';
+            ai.timer = 0.35;
+            monster.aggro = true;
+            break;
+          }
+          if (homeDistance <= 12) { ai.state = 'idle'; ai.timer = Utils.randRange(0.5, 1.6); break; }
+          // catch its breath while walking home
+          if (monster.hp < monster.maxHp) {
+            monster.hp = Math.min(monster.maxHp, monster.hp + monster.maxHp * 0.09 * dt);
+          }
+          stepMonster(monster, monster.home.x, monster.home.y, monster.speed * 0.7 * speedMultiplier * dt);
+          if (!Anim.isBusy(monster)) Anim.set(monster, 'walk');
+          break;
+        }
+
+        default:
+          ai.state = 'idle';
+          ai.timer = 0.5;
       }
 
       Anim.update(monster, dt, monster.aggro ? 'walk' : 'idle');
+      void angry;
       clampToWorld(monster);
     }
 
@@ -4615,6 +5071,31 @@
       }
     }
 
+    /** Move a monster toward a point, respecting cliffs and solid props. */
+    function stepMonster(monster, targetX, targetY, step) {
+      const dx = targetX - monster.pos.x;
+      const dy = targetY - monster.pos.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const move = Math.min(step, dist);
+      const toX = monster.pos.x + (dx / dist) * move;
+      const toY = monster.pos.y + (dy / dist) * move;
+      const solved = Renderer.resolveMove(monster.pos.x, monster.pos.y, toX, toY, monster.radius);
+      monster.pos.x = solved.x;
+      monster.pos.y = solved.z;
+      monster.facing = { x: dx, y: dy };
+      if (solved.blocked) {
+        // nudge sideways so a monster does not grind against a wall forever
+        const side = (monster.aiOffset % 2 ? 1 : -1) * 0.9;
+        const px = -dy / dist * side;
+        const py = dx / dist * side;
+        const slide = Renderer.resolveMove(monster.pos.x, monster.pos.y,
+          monster.pos.x + px * move, monster.pos.y + py * move, monster.radius);
+        monster.pos.x = slide.x;
+        monster.pos.y = slide.z;
+      }
+      return solved;
+    }
+
     function wander(monster, dt, speedMultiplier) {
       monster.wanderTimer -= dt;
       if (monster.wanderTimer <= 0) {
@@ -4646,12 +5127,14 @@
     }
 
     function monsterAttack(monster, player) {
-      monster.attackCooldown = monster.def.attackCooldownMs;
+      monster.attackCooldown = monster.attackCooldownMs || 1500;
       monster.attackAnim = 1;
+      Sfx.play('swing');
 
       // evasion (Ninja passives, light armour)
       if (Utils.random() < (player.evasion || 0)) {
         Effects.addFloater(player.pos.x, player.pos.y - 64, 'MISS', { color: '#bfefff', size: 16, life: 700 });
+        Sfx.play('miss');
         Log.push(monster.name + ' misses ' + player.name + '.', null);
         emit('playerDodged', { monster: monster, player: player });
         return;
@@ -4664,6 +5147,7 @@
       player.hurtTimer = COMBAT.outOfCombatRegenDelayMs;
       Anim.set(player, 'hurt');
       Skills.addRage(player, 5);
+      Sfx.play('hurt');
 
       Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, {
         color: '#ff8080', size: 18
@@ -4691,21 +5175,73 @@
         Log.push(player.name + ' has fallen! Recovering...', 'log--down');
       }
       Effects.addShake(9);
+      Sfx.play('downed');
+      Effects.showBanner('YOU DIED — recovering...');
       emit('playerDowned', { player: player });
       if (state.mode !== 'free') emit('battle:playerDown', { player: player, mode: state.mode });
+    }
+
+    /**
+     * Nearest place it is actually safe to stand back up: the village safe
+     * ring when the hero fell near the hometown, otherwise the class spawn,
+     * and never inside a rock, a wall or the lake.
+     */
+    function countMonstersNear(x, y, radius) {
+      let count = 0;
+      (state.monsters || []).forEach(function (monster) {
+        if (!monster.alive) return;
+        if (Utils.distance(monster.pos.x, monster.pos.y, x, y) <= radius) count += 1;
+      });
+      return count;
+    }
+
+    function safeRespawnPoint(fromX, fromY) {
+      const floorTop = (WORLD.floorTop || WORLD.margin) + 20;
+      const inside = function (spot) {
+        // the village and the mountains are scenery; only the floor is walkable
+        spot.x = Utils.clamp(spot.x, WORLD.margin + 16, WORLD.width - WORLD.margin - 16);
+        spot.y = Utils.clamp(spot.y, floorTop, WORLD.height - WORLD.margin - 16);
+        return spot;
+      };
+
+      const candidates = [];
+      const village = root.MytharaRender3D && root.MytharaRender3D.safeZone ? root.MytharaRender3D.safeZone() : null;
+      if (village && Utils.distance(fromX, fromY, village.x, village.z) <= 900) {
+        // the village gate — the closest walkable ground to the safe ring
+        candidates.push(inside({ x: village.x, y: village.z + 110 }));
+        candidates.push(inside({ x: village.x - 60, y: village.z + 130 }));
+        candidates.push(inside({ x: village.x + 60, y: village.z + 130 }));
+      }
+      candidates.push({ x: PLAYER_DEF.spawn.x, y: PLAYER_DEF.spawn.y });
+      candidates.push({ x: PLAYER_DEF.spawn.x + 46, y: PLAYER_DEF.spawn.y });
+      candidates.push({ x: PLAYER_DEF.spawn.x - 46, y: PLAYER_DEF.spawn.y });
+
+      let fallback = null;
+      for (let i = 0; i < candidates.length; i++) {
+        const spot = candidates[i];
+        if (!isInsideWorld(spot.x, spot.y)) continue;
+        const solved = Renderer.resolveMove(spot.x, spot.y, spot.x, spot.y, 16);
+        if (solved.blocked) continue;
+        if (Renderer.waterDepth && Renderer.waterDepth(spot.x, spot.y) > 0.05) continue;
+        if (countMonstersNear(spot.x, spot.y, 150) === 0) return spot;    // quiet ground first
+        if (!fallback) fallback = spot;
+      }
+      return fallback || { x: PLAYER_DEF.spawn.x, y: PLAYER_DEF.spawn.y };
     }
 
     function revivePlayer(player) {
       player.downed = false;
       player.hp = player.maxHp;
       player.mp = player.maxMp;
-      player.pos.x = PLAYER_DEF.spawn.x;
-      player.pos.y = PLAYER_DEF.spawn.y;
+      const spot = safeRespawnPoint(player.pos.x, player.pos.y);
+      player.pos.x = spot.x;
+      player.pos.y = spot.y;
       player.hurtTimer = 0;
       Stats.recompute(player);
       player.hp = player.maxHp;
       player.mp = player.maxMp;
       Effects.burst(player.pos.x, player.pos.y, '#9ad1ff', 16, { speedMax: 130, lift: 60 });
+      Sfx.play('revive');
       Log.push(player.name + ' is back on their feet.', 'log--level');
       emit('playerRevived', { player: player });
     }
@@ -4719,6 +5255,14 @@
       monster.aggro = false;
       monster.hitFlash = 0;
       monster.spawnPulse = 1;
+      // A new life must be able to pay rewards again — without clearing this
+      // the respawned monster would be unkillable and reward nothing.
+      monster.rewarded = false;
+      monster.respawnTimer = 0;
+      monster.attackCooldown = 0;
+      monster.deathTimer = 0;
+      if (monster.ai) { monster.ai.state = 'idle'; monster.ai.timer = Utils.randRange(0.4, 1.4); }
+      monster.patrolTarget = null;
       Statuses.clear(monster);
       monster.wanderTimer = Utils.randRange(0.6, 1.8);
       Effects.burst(monster.pos.x, monster.pos.y, monster.def.palette.shine, 18, { speedMax: 120, lift: 20 });
@@ -4750,6 +5294,7 @@
         emit('levelUp', { player: player });
       }
       if (leveled) {
+        Sfx.play('level');
         Effects.showBanner('Level ' + player.level + '!');
         Effects.burst(player.pos.x, player.pos.y, '#ffe9a8', 30, { speedMax: 240, lift: 120 });
         Effects.addShake(5);
@@ -4791,6 +5336,16 @@
       hitMonster: hitMonster,
       nearestMonster: nearestMonster,
       monstersNear: monstersNear,
+      target: function () { return isValidTarget(state.target) ? state.target : null; },
+      loot: function () { return state.loot; },
+      dropLoot: dropLoot,
+      pickupLoot: pickupLoot,
+      selectTarget: selectTarget,
+      clearTarget: clearTarget,
+      cycleTarget: cycleTarget,
+      currentTarget: currentTarget,
+      pickTargetAt: pickTargetAt,
+      lineOfSight: lineOfSight,
       healPlayer: healPlayer,
       createCharacter: createCharacter,
       createMonsters: createMonsters,
