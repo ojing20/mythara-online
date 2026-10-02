@@ -3,7 +3,7 @@
  * ------------------------------------------------------------
  * Account-server test suite. Runs with Node's built-in runner:
  *
- *     node --test server/tests/
+ *     node --test                     (from the repository root)
  *
  * It boots the real HTTP server against a throwaway database and
  * drives the full cross-device story: register on device A, play,
@@ -206,6 +206,31 @@ test('a stale revision from another device is reported as a conflict', async fun
   const forced = await put('/api/account', { account: staleAccount, baseRevision: baseRevision, force: true }, deviceB.body.token);
   assert.strictEqual(forced.status, 200);
   assert.strictEqual(forced.body.revision, conflict.body.revision + 1);
+});
+
+test('a save without a baseRevision cannot silently clobber another device', async function () {
+  const one = await post('/api/login', { identifier: 'jingle', password: 'swordfish7' });
+  const two = await post('/api/login', { identifier: 'jingle', password: 'swordfish7' });
+  const current = await get('/api/account', one.body.token);
+
+  // no baseRevision at all → "never synced", so the server protects the copy
+  const blind = await put('/api/account', { account: { profile: current.body.account.profile } }, two.body.token);
+  assert.strictEqual(blind.status, 409, 'a blind write must not overwrite another device');
+  assert.strictEqual(blind.body.conflict, true);
+  assert.ok(blind.body.account, 'the server returns its copy to merge');
+
+  // baseRevision 0 (fresh device / cleared storage) is the same story
+  const zero = await put('/api/account', { account: { profile: current.body.account.profile }, baseRevision: 0 }, two.body.token);
+  assert.strictEqual(zero.status, 409);
+
+  // the revision the client actually holds goes through
+  const good = await put('/api/account', { account: { profile: current.body.account.profile }, baseRevision: current.body.revision }, two.body.token);
+  assert.strictEqual(good.status, 200);
+  assert.strictEqual(good.body.revision, current.body.revision + 1);
+
+  // force:true remains the explicit "my copy wins" override
+  const forced = await put('/api/account', { account: { profile: current.body.account.profile }, baseRevision: 0, force: true }, two.body.token);
+  assert.strictEqual(forced.status, 200);
 });
 
 test('tokens are required and can be revoked by logging out', async function () {

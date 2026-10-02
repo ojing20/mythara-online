@@ -98,6 +98,9 @@
       quests: { resetAt: 0, progress: {}, claimed: {} },
       daily: { lastClaimAt: 0, streak: 0, totalClaims: 0 },
 
+      /* legacy canvas-build save already imported into this account (or null) */
+      legacyImport: null,
+
       stats: {
         monstersDefeated: 0, stagesCleared: 0, arenaWins: 0,
         potionsUsed: 0, equipmentUpgraded: 0, bossesDefeated: 0, summons: 0
@@ -306,21 +309,51 @@
     /**
      * Bring a pre-account (legacy build) character save into this profile.
      * Old saves only carried { classId, name } — honour both.
+     *
+     * `options.mode` decides how eager to be:
+     *   'register' (default) — a brand-new account on this device: import.
+     *   'login'              — only when the account has no progress yet, so
+     *                          signing in on a second device (or reloading
+     *                          the page) can never rewrite the character the
+     *                          player picked in the account build.
      */
-    function importLegacySave(saved) {
+    function importLegacySave(saved, options) {
       if (!record || !saved || !saved.classId) return { ok: false, migrated: false };
       const classDef = root.Mythara && root.Mythara.Classes ? root.Mythara.Classes[saved.classId] : null;
       if (!classDef) return { ok: false, migrated: false };
 
+      const p = profile();
+      const name = saved.name ? String(saved.name).slice(0, 14) : null;
+
+      // Import each legacy save exactly once. The engine keeps its own
+      // `mythara.character.v1` save around, and re-importing it on every
+      // login used to overwrite the character the player had since chosen
+      // in the account build (and re-save the profile each time).
+      const previous = p.legacyImport;
+      if (previous && previous.classId === saved.classId && (previous.name || null) === name) {
+        return { ok: true, migrated: false, alreadyImported: true, classId: saved.classId, name: p.characterName };
+      }
+
+      const mode = (options && options.mode) || 'register';
+      const stageIds = Object.keys(p.stageProgress || {});
+      const pristine = !previous &&
+        (p.stats.stagesCleared || 0) === 0 && (p.stats.monstersDefeated || 0) === 0 &&
+        (p.stats.arenaWins || 0) === 0 && (p.inventory || []).length === 0 &&
+        (p.level || 1) <= 1 && !stageIds.some(function (id) { return p.stageProgress[id] && p.stageProgress[id].cleared; });
+      if (mode === 'login' && !pristine) {
+        return { ok: true, migrated: false, skipped: 'account-already-played', classId: saved.classId };
+      }
+
       const state = character(saved.classId) || defaultCharacterState(saved.classId);
-      profile().characters[saved.classId] = state;
+      p.characters[saved.classId] = state;
       if (!state.unlocked) { state.unlocked = true; state.unlockedAt = Date.now(); }
-      profile().activeCharacter = saved.classId;
-      if (saved.name) profile().characterName = String(saved.name).slice(0, 14);
-      profile().stats.legacyImports = (profile().stats.legacyImports || 0) + 1;
+      p.activeCharacter = saved.classId;
+      if (name) p.characterName = name;
+      p.legacyImport = { classId: saved.classId, name: name, importedAt: Date.now() };
+      p.stats.legacyImports = (p.stats.legacyImports || 0) + 1;
       save();
-      Core.Bus.emit('account:imported', { classId: saved.classId, name: profile().characterName });
-      return { ok: true, migrated: true, classId: saved.classId, name: profile().characterName };
+      Core.Bus.emit('account:imported', { classId: saved.classId, name: p.characterName });
+      return { ok: true, migrated: true, classId: saved.classId, name: p.characterName };
     }
 
     /** Fetch a saved account by id and make it the active one. */
@@ -364,6 +397,7 @@
       if (!p.settings) p.settings = defaults.settings;
       if (!p.pvp) p.pvp = defaults.pvp;
       if (!p.stageProgress) p.stageProgress = {};
+      if (p.legacyImport === undefined) p.legacyImport = null;
     }
 
     function isReady() { return !!record; }

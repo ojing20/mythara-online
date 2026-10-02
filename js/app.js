@@ -262,7 +262,7 @@
         session = { accountId: record.id, username: record.username };
         dailyShown = false;
         UI.toast('Welcome back, ' + record.username + '!', 'good');
-        migrateLegacyCharacter();
+        migrateLegacyCharacter('login');
         enterMenu();
         if (Sync && Sync.isCloud()) syncAfterLogin(record);
       });
@@ -283,7 +283,7 @@
         session = { accountId: record.id, username: record.username };
         dailyShown = false;
         UI.toast('Account created. Welcome to Mythara!', 'good');
-        migrateLegacyCharacter();
+        migrateLegacyCharacter('register');
         enterMenu();
       });
     }
@@ -316,11 +316,11 @@
     }
 
     /** Bring a pre-account (legacy) character save into the new profile. */
-    function migrateLegacyCharacter() {
+    function migrateLegacyCharacter(mode) {
       if (!root.Mythara || !root.Mythara.Game) return;
       const saved = root.Mythara.Game.loadSavedCharacter ? root.Mythara.Game.loadSavedCharacter() : null;
       if (!saved) return;
-      const result = Account.importLegacySave(saved);
+      const result = Account.importLegacySave(saved, { mode: mode || 'register' });
       if (result && result.migrated) {
         UI.toast('Old save found — ' + (root.Mythara.Classes[result.classId] || {}).name + ' ' + result.name + ' restored.', 'good');
       }

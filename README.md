@@ -307,15 +307,15 @@ server, so you can play from a local folder and still sync.
 | `server/api.js` | Routes, `Bearer` auth, body/profile caps, CORS, revision conflict responses |
 | `server/auth.js` | scrypt hashing, credential validation, token minting, `publicAccount()` |
 | `server/db.js` | JSON file database: atomic writes, debounce, sessions, TTL pruning, quarantine |
-| `server/tests/api.test.js` | `node --test server/tests` — 12 end-to-end server checks |
+| `server/tests/api.test.js` | `node --test` — 13 end-to-end server checks |
 
 ### Tests
 
-Seven suites cover the build — 513 checks total. The server suite ships in the repository and runs
+Seven suites cover the build — 514 checks total. The server suite ships in the repository and runs
 with no dependencies; the six jsdom/canvas suites run from a local harness:
 
 ```bash
-node --test server/tests/     # 12 server checks (register, login, conflicts, restart)
+node --test                   # 13 server checks (register, login, conflicts, restart)
 ```
 
 

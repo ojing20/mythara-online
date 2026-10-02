@@ -177,6 +177,11 @@ function handleGetAccount(ctx, req) {
 /**
  * Save the account. `baseRevision` lets the client detect that another
  * device wrote first; the caller then merges (see js/sync.js).
+ *
+ * A missing/0 baseRevision means "I have never synced this account", so
+ * it can never silently overwrite a copy another device already saved —
+ * it gets the 409 + the server copy and merges like everyone else.
+ * `force: true` stays available as the explicit override.
  */
 async function handlePutAccount(ctx, req) {
   const found = withAccount(ctx.db, req);
@@ -191,9 +196,10 @@ async function handlePutAccount(ctx, req) {
     return { status: 413, body: { ok: false, error: 'Profile is too large.' } };
   }
 
-  const baseRevision = Number(body.baseRevision || 0);
+  const parsedBase = Number(body.baseRevision);
+  const baseRevision = Number.isFinite(parsedBase) ? parsedBase : 0;
   const force = !!body.force;
-  if (!force && baseRevision && baseRevision < account.revision) {
+  if (!force && baseRevision < account.revision) {
     return {
       status: 409,
       body: {
