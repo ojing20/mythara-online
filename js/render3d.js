@@ -83,6 +83,9 @@
     function attach(canvas) {
       if (!canvas || !canvas.getContext) return null;
       const opts = optionsFromUrl();
+      if (opts.quality === 'auto' || !QUALITY_PRESETS[opts.quality]) {
+        state.qualityLevel = QUALITY_PRESETS[detectStartQuality()];
+      }
       if (opts.render2d) { state.enabled = false; return null; }
       const context2d = canvas.getContext ? canvas.getContext('2d') : null;
       if (!context2d) return null;                     // no canvas support → keep the 2D fallback
@@ -131,6 +134,21 @@
       state.timeOfDay = clamp(t, 0, 1);
       if (cycle !== undefined) state.cycle = !!cycle;
       return state.timeOfDay;
+    }
+
+    /**
+     * Starting quality for 'auto': phones start lower and the adaptive loop
+     * promotes them if frames are fast, instead of janking at 'high' first.
+     */
+    function detectStartQuality() {
+      const nav = root.navigator || {};
+      const coarse = !!(root.matchMedia && root.matchMedia('(pointer: coarse)').matches);
+      const small = Math.min(root.innerWidth || 960, root.innerHeight || 540) < 520;
+      const dpr = root.devicePixelRatio || 1;
+      const cores = nav.hardwareConcurrency || 8;   // assume unknown devices are fine
+      if (dpr >= 3 || (coarse && small)) return 'low';
+      if (coarse || small || dpr >= 2 || cores <= 4) return 'medium';
+      return 'high';
     }
 
     function setQuality(mode) {
@@ -420,7 +438,7 @@
       if (state.frameTime > 34 && level > 1) {
         state.qualityLevel = QUALITY_PRESETS[level === 3 ? 'medium' : 'low'];
         resize();
-      } else if (state.frameTime < 20 && level < 3) {
+      } else if (state.frameTime < 15 && level < 3) {
         state.qualityLevel = QUALITY_PRESETS[level === 1 ? 'medium' : 'high'];
         resize();
       }

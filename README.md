@@ -239,8 +239,10 @@ files. The original 2D renderer stays in the build untouched and can be selected
 | Combat | Weapon swings, impact bursts, spell particles (fire/ice/lightning/holy), floating damage and crit numbers, screen shake, ground decals, projectiles |
 | UI | Loading screen with animated logo, percentage and rotating tips; gold-ringed portrait, level/class, ornate HP/MP/XP bars, equipment slots, skill hotbar, quest tracker, minimap, chat frame, wallet (coins/gems/potions) and a boss HP bar |
 
-Quality presets (`?quality=low|medium|high`, default `auto`) scale view distance and detail for
-phones. `?time=0..1` pins the time of day.
+Quality presets (`?quality=low|medium|high`, default `auto`) scale view distance, render scale and
+detail. On `auto` the renderer starts lower on phone-like devices (coarse pointer, high DPR or a
+small viewport) and then follows the measured frame time, so phones stay smooth instead of janking
+at `high` first. `?time=0..1` pins the time of day.
 
 ### Development tools (`tools/`)
 
