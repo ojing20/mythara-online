@@ -179,7 +179,10 @@ const CLASSES = ['warrior', 'archer', 'fireMage', 'iceMage', 'assassin', 'paladi
       const heroMoved = Math.abs(hero.pos.x - 320) > 20;
       const camMoved = Math.abs(cam.state.eye.x - before.x) > 10 || Math.abs(cam.state.eye.z - before.z) > 10;
       checks.follows = heroMoved && camMoved;
-      checks.behind = cam.state.eye.z > hero.pos.y + 40;    // looking from +Z (behind the hero)
+      // third-person: the eye sits behind the hero relative to its facing
+      const toEye = { x: cam.state.eye.x - hero.pos.x, z: cam.state.eye.z - hero.pos.y };
+      const facingLen = Math.hypot(hero.facing.x, hero.facing.y) || 1;
+      checks.behind = (toEye.x * hero.facing.x + toEye.z * hero.facing.y) / facingLen < -10;
 
       // mouse drag rotates the camera (read straight after the event: the
       // chase camera deliberately eases back toward the hero over ~2.4 s)
