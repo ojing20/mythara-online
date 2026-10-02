@@ -311,7 +311,13 @@ server, so you can play from a local folder and still sync.
 
 ### Tests
 
-Seven suites cover the build — 506 checks total:
+Seven suites cover the build — 513 checks total. The server suite ships in the repository and runs
+with no dependencies; the six jsdom/canvas suites run from a local harness:
+
+```bash
+node --test server/tests/     # 12 server checks (register, login, conflicts, restart)
+```
+
 
 | Suite | Checks | Covers |
 | --- | --- | --- |
@@ -321,7 +327,7 @@ Seven suites cover the build — 506 checks total:
 | `appflow.js` | 133 | Loading → register → menu → select → stage battle → bosses → arena → shop/summon → save/reload |
 | `campaign.test.js` | 113 | All 50 stages and 10 bosses, unlocks, energy, quests, dailies, equipment, mobile, login variants, legacy import |
 | `server/tests/api.test.js` | 12 | Register/login, hashed storage, two devices pulling one account, 409 conflicts, token revocation, restart persistence |
-| `sync.test.js` | 28 | Two jsdom "devices" vs a real server: same coins/items/stages/levels, offline edits merge, logout revokes the token |
+| `sync.test.js` | 35 | Three jsdom "devices" (PC, phone, same-origin tablet) against a real server: same coins/items/stages/levels, offline edits merge instead of clobbering, logout revokes the token |
 
 ## Roadmap (not implemented yet)
 
