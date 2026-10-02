@@ -558,9 +558,7 @@
     const c = pal(monster);
     const def = monster.def || {};
     const scale = (monster.scale || 1) * 1.6;
-    const root = node(mat4.compose(
-      groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * scale * 0.4,
-      v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * scale * 0.4, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: def.armored ? '#c9d2e0' : undefined };
     const swing = a.lunge;
@@ -612,9 +610,7 @@
   function drawBeast(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.55;
-    const root = node(mat4.compose(
-      groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * scale * 0.25,
-      v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * scale * 0.25, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const legPhase = a.cycle;
@@ -652,7 +648,7 @@
   function drawArachnid(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.5;
-    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const abdomen = node(root, v3(0, 4.4, -3.2), v3(a.lunge * -0.1, 0, 0));
     S.blob(P, { matrix: null, pos: mat4.transformPoint(abdomen, v3(0, 0, 0)), radii: v3(4.4, 3.6, 5.0), slices: 6, rings: 3, color: c.dark, jitter: 0.12, seed: 3 });
@@ -677,7 +673,7 @@
   function drawScorpion(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.5;
-    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const torso = node(root, v3(0, 4.0, 0), v3(a.lunge * -0.12, 0, 0));
     S.blob(P, { matrix: null, pos: mat4.transformPoint(torso, v3(0, 0, -1.4)), radii: v3(4.0, 2.8, 5.4), slices: 6, rings: 3, color: c.primary, jitter: 0.12, seed: 7 });
@@ -726,7 +722,7 @@
   function drawGolem(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.62;
-    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: '#9aa0ae' };
     const torso = node(root, v3(0, 10.0, 0), v3(a.lunge * -0.14, 0, 0));
     part(P, torso, v3(7.4, 8.4, 5.4), { front: c.primary, back: c.dark, side: c.secondary, top: Colour.shade(c.primary, 0.12) }, body);
@@ -760,7 +756,7 @@
   function drawTreant(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.9;
-    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.25, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.25, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const trunk = node(root, v3(0, 9.0, 0), v3(a.lunge * -0.16, 0, 0));
     part(P, trunk, v3(5.0, 12.0, 4.6), { front: '#6b4c2c', back: '#54391f', side: '#5f4224' }, body);
@@ -873,7 +869,7 @@
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.9;
     const squash = 1 + Math.sin((monster.walkPhase || 0) * 6 + 1) * 0.12 + a.lunge * 0.18;
-    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.2 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale * squash, scale)));
+    const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.2 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale * squash, scale)));
     const body = { alpha: opts.alpha * 0.92, tint: opts.tint };
     S.blob(P, {
       matrix: null, pos: mat4.transformPoint(root, v3(0, 4.2, 0)),

@@ -9,7 +9,9 @@
     "bosses": "node render-suite.js shots/suite --what=bosses",
     "classes": "node render-suite.js shots/suite --what=classes",
     "combat": "node render-suite.js shots/suite --what=combat",
-    "perf": "node render-perf.js"
+    "perf": "node render-perf.js",
+    "rigs": "node rig-check.js",
+    "gameflow": "node gameflow-check.js"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.0.10",

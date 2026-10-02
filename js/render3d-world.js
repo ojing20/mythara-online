@@ -72,13 +72,13 @@
     chapter4: {
       grade: { colour: '#cfeaff', alpha: 0.1, blend: 'overlay' },
       id: 'chapter4', name: 'Frozen Valley',
-      skyTop: '#4a7fa8', skyBottom: '#dff2ff', accent: '#7fdcff', fog: '#cfe6f5', fogDensity: 0.0022,
-      ground: { base: '#dbeaf5', alt: '#c2d8e8', rock: '#9fb0bd', path: '#b9c9d6', cliff: '#8fa6b6' },
+      skyTop: '#3f76a4', skyBottom: '#cfe6f8', accent: '#7fdcff', fog: '#bcd8ec', fogDensity: 0.0018,
+      ground: { base: '#b9d2e6', alt: '#93b3cc', rock: '#7a8ea1', path: '#c6daea', cliff: '#68798c', sand: '#cfe0ee' },
       weather: 'snow', cycle: true, sunStart: 0.4,
       props: { trees: 'conifer', treeCount: 90, rocks: 34, bushes: 12, ice: 30, water: 'frozen', village: 3, castle: 'tower', ruins: 6, torches: 6, fences: 4 }
     },
     chapter5: {
-      grade: { colour: '#ffcf7a', alpha: 0.1, blend: 'overlay' },
+      grade: { colour: '#ffcf7a', alpha: 0.055, blend: 'overlay' },
       id: 'chapter5', name: 'Desert Ruins',
       skyTop: '#c98f4a', skyBottom: '#f6e2b4', accent: '#ffb347', fog: '#e7cf9e', fogDensity: 0.0024,
       ground: { base: '#e0c48a', alt: '#cdae72', rock: '#b09468', path: '#d8bd83', cliff: '#a98b5c' },
@@ -435,9 +435,9 @@
           list.push({ type: 'market', x: x, z: z, y: heightAt(x, z), s: 1, rot: c[2], v: i === 1 ? 0.8 : 0.3, i: i + 4 });
         });
         [
-          { x: V.x - 16, z: V.z + 16, name: 'Warden Ilsa', mark: '!', v: 0.2 },
-          { x: V.x + 14, z: V.z - 18, name: 'Trader Bex', mark: '$', v: 0.5 },
-          { x: V.x - 22, z: V.z - 20, name: 'Healer Sora', mark: '+', v: 0.85 }
+          { x: V.x - 34, z: V.z + 30, name: 'Warden Ilsa', mark: '!', v: 0.2 },
+          { x: V.x + 34, z: V.z - 8, name: 'Trader Bex', mark: '$', v: 0.5 },
+          { x: V.x - 30, z: V.z - 34, name: 'Healer Sora', mark: '+', v: 0.85 }
         ].forEach(function (n, i) {
           list.push({ type: 'npc', x: n.x, z: n.z, y: heightAt(n.x, n.z), s: 1, rot: 0, v: n.v, i: i + 1, name: n.name, mark: n.mark });
         });
@@ -513,7 +513,7 @@
     const push = function (kind, weight) { kinds.push({ kind: kind, weight: weight }); };
 
     if (props.water === 'swamp') { push('moss', 4); push('reed', 3); push('puddle', 1); push('pebble', 1); }
-    else if (theme_.id === 'chapter4') { push('snowdrift', 5); push('iceShard', 2); push('pebble', 1); }
+    else if (theme_.id === 'chapter4') { push('snowdrift', 4); push('iceShard', 3); push('pebble', 2); push('moss', 1); }
     else if (theme_.id === 'chapter5') { push('pebble', 4); push('dune', 4); push('bone', 1); }
     else if (theme_.id === 'chapter3') { push('pebble', 4); push('moss', 3); push('crystalShard', 1); }
     else if (theme_.id === 'chapter7' || theme_.id === 'chapter8') { push('ash', 4); push('pebble', 3); push('emberRock', 2); push('bone', 1); }
@@ -636,11 +636,28 @@
     });
   }
 
-  function rockSmall(P, p) {
+  /**
+   * Field rocks: a bedrock lump half-buried in the ground plus a couple of
+   * companion boulders. Sunk low so they read as rock, not paper shards.
+   */
+  function rockSmall(P, p, theme_) {
+    const g = (theme_ && theme_.ground) || {};
+    const base = g.rock || '#7d7f86';
+    const alt = Colour.shade(base, -0.22);
     S.blob(P, {
-      pos: v3(p.x, p.y + 1.2 * p.s, p.z), radii: v3(2.6 * p.s, 1.9 * p.s, 2.4 * p.s),
-      slices: 5, rings: 2, color: '#7d7f86', jitter: 0.4, seed: p.i, yaw: p.rot
+      pos: v3(p.x, p.y - 0.6 * p.s, p.z), radii: v3(2.9 * p.s, 2.5 * p.s, 2.7 * p.s),
+      slices: 6, rings: 3, color: base, jitter: 0.34, seed: p.i, yaw: p.rot
     });
+    S.blob(P, {
+      pos: v3(p.x + 1.7 * p.s, p.y - 0.8 * p.s, p.z + 1.1 * p.s), radii: v3(1.7 * p.s, 1.4 * p.s, 1.6 * p.s),
+      slices: 5, rings: 2, color: alt, jitter: 0.42, seed: p.i + 11, yaw: p.rot + 1.1
+    });
+    if (p.v > 0.6) {
+      S.blob(P, {
+        pos: v3(p.x - 1.9 * p.s, p.y - 0.9 * p.s, p.z - 1.3 * p.s), radii: v3(1.2 * p.s, 1.0 * p.s, 1.1 * p.s),
+        slices: 4, rings: 2, color: base, jitter: 0.4, seed: p.i + 23
+      });
+    }
   }
 
   function rockBig(P, p, theme_) {
@@ -1518,7 +1535,7 @@
         case 'tree:dead': treeDead(P, p, time); break;
         case 'tree:void': treeVoid(P, p, time); break;
         case 'bush': bush(P, p); break;
-        case 'rock': rockSmall(P, p); break;
+        case 'rock': rockSmall(P, p, theme__); break;
         case 'rockBig': rockBig(P, p, theme__); break;
         case 'stalagmite': stalagmite(P, p); break;
         case 'crystal': crystal(P, p, theme__); break;
@@ -1667,10 +1684,10 @@
       S.billboard(P, { pos: v3(p.x, y + 14.4, p.z), width: 4.4, height: 4.4, color: trim, alpha: 0.22, soft: true });
       // marker
       const mark = p.mark || '!';
-      const my = y + 19 + Math.sin(t * 3 + p.i) * 0.7;
+      const my = y + 22 + Math.sin(t * 3 + p.i) * 0.7;
       S.billboard(P, { pos: v3(p.x, my, p.z), width: 5.4, height: 5.4, color: mark === '!' ? '#ffd76a' : mark === '$' ? '#8fe3a0' : '#ff9ec4', alpha: 0.26, soft: true });
       P.label(v3(p.x, my, p.z), mark, { size: 17, weight: '900', color: mark === '!' ? '#ffd76a' : mark === '$' ? '#8fe3a0' : '#ff9ec4' });
-      P.label(v3(p.x, y + 16.6, p.z), p.name || 'Villager', { size: 11.5, weight: '700', color: '#f0e9dc' });
+      P.label(v3(p.x, y + 17.2, p.z), p.name || 'Villager', { size: 10, weight: '700', color: '#f0e9dc', alpha: 0.95 });
     }
 
     /** Safe-zone ring on the plaza: a soft gold boundary plus ground glow. */
@@ -1733,11 +1750,11 @@
         S.blade(P, { pos: v3(d.x, d.y, d.z), width: 0.3, height: 2.6 * d.s, angle: d.rot, lean: 0.3, color: '#3f7a33', alpha: 0.9 });
         S.billboard(P, { pos: v3(d.x + 0.2, d.y + 2.8 * d.s, d.z), width: 1.5 * d.s, height: 1.5 * d.s, color: d.v > 0.5 ? '#ffe9a8' : '#f7a8d0', alpha: 0.95, round: true });
       } else if (kind === 'pebble') {
-        S.blob(P, { pos: v3(d.x, d.y + 0.5 * d.s, d.z), radii: v3(1.5 * d.s, 0.9 * d.s, 1.4 * d.s), slices: 5, rings: 2, color: theme_.ground.rock, jitter: 0.3, seed: d.v * 9, yaw: d.rot });
+        S.blob(P, { pos: v3(d.x, d.y + 0.5 * d.s, d.z), radii: v3(1.5 * d.s, 0.9 * d.s, 1.4 * d.s), slices: 5, rings: 2, color: d.v > 0.5 ? theme_.ground.rock : Colour.shade(theme_.ground.alt, -0.12), jitter: 0.3, seed: d.v * 9, yaw: d.rot });
       } else if (kind === 'twig') {
         S.cylinder(P, { pos: v3(d.x, d.y + 0.4, d.z), radius: 0.3, height: 3.4 * d.s, sides: 4, color: '#5a4026', rot: v3(0, 0, Math.PI / 2 + (d.v - 0.5) * 0.4), yaw: d.rot });
       } else if (kind === 'snowdrift') {
-        S.blob(P, { pos: v3(d.x, d.y + 0.4 * d.s, d.z), radii: v3(3.4 * d.s, 1.1 * d.s, 2.8 * d.s), slices: 6, rings: 2, color: '#f4faff', jitter: 0.18, seed: d.v * 11, yaw: d.rot, lit: true });
+        S.blob(P, { pos: v3(d.x, d.y + 0.35 * d.s, d.z), radii: v3(3.4 * d.s, 1.15 * d.s, 2.8 * d.s), slices: 6, rings: 2, color: d.v > 0.45 ? '#eef7ff' : '#d3e4f2', jitter: 0.18, seed: d.v * 11, yaw: d.rot, lit: true });
       } else if (kind === 'iceShard') {
         S.cone(P, { pos: v3(d.x, d.y + 1.4 * d.s, d.z), radius: 0.9 * d.s, height: 2.8 * d.s, sides: 5, color: '#dff2ff', glow: '#bfe9ff', glowAlpha: 0.15, cap: false, yaw: d.rot });
       } else if (kind === 'dune') {

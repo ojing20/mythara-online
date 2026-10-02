@@ -255,9 +255,9 @@ phones. `?time=0..1` pins the time of day.
 | Artefact fixes | Terrain culling now keeps heavily foreshortened near cells (no more sky showing through under the camera), the road is fine-segmented so it hugs hills, and the plaza/market/blacksmith/NPC set is limited to the hometown chapter |
 | Performance | Density LOD thins distant scenery deterministically, closed shapes back-face cull, small furniture is near-only, and the Low/Medium/High presets scale prop distance, detail distance, render scale and weather density |
 
-Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈28 ms median** in the hub
-village and **≈27 ms median** in a chapter-1 battle (p90 ≈ 49–67 ms). A real browser with a
-GPU-backed canvas is several times faster.
+Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈25 ms median** in the hub
+village and **≈25 ms median** in a chapter-1 battle (p90 ≈ 53 ms), chapter-8 boss ≈23 ms. A real
+browser with a GPU-backed canvas is several times faster; the legacy 2D renderer stays under 1 ms.
 
 ### Development tools (`tools/`)
 
