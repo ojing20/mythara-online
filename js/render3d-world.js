@@ -66,15 +66,15 @@
       id: 'chapter3', name: 'Dark Caverns',
       skyTop: '#12161f', skyBottom: '#3a4250', accent: '#8fe3ff', fog: '#2a3242', fogDensity: 0.0034,
       ground: { base: '#4a4f5c', alt: '#3b404b', rock: '#5c6270', path: '#63676f', cliff: '#2f343d' },
-      weather: 'drip', cycle: false, sunStart: 0.5, ceiling: true,
+      weather: 'drip', cycle: false, sunStart: 0.5, ceiling: true, mottle: 0.34,
       props: { trees: 'none', treeCount: 0, rocks: 70, stalagmites: 44, crystals: 26, water: 'lake', village: 0, castle: null, ruins: 8, torches: 12, fences: 0, glowingMoss: true }
     },
     chapter4: {
       grade: { colour: '#cfeaff', alpha: 0.1, blend: 'overlay' },
       id: 'chapter4', name: 'Frozen Valley',
       skyTop: '#4a7fa8', skyBottom: '#dff2ff', accent: '#7fdcff', fog: '#cfe6f5', fogDensity: 0.0022,
-      ground: { base: '#dbeaf5', alt: '#c2d8e8', rock: '#9fb0bd', path: '#b9c9d6', cliff: '#8fa6b6' },
-      weather: 'snow', cycle: true, sunStart: 0.4,
+      ground: { base: '#cfe0ee', alt: '#a9c4d8', rock: '#87949f', path: '#b9c9d6', cliff: '#6f8494' },
+      weather: 'snow', cycle: true, sunStart: 0.4, mottle: 0.3,
       props: { trees: 'conifer', treeCount: 90, rocks: 34, bushes: 12, ice: 30, water: 'frozen', village: 3, castle: 'tower', ruins: 6, torches: 6, fences: 4 }
     },
     chapter5: {
@@ -90,7 +90,7 @@
       id: 'chapter6', name: 'Haunted Swamp',
       skyTop: '#2f4a3a', skyBottom: '#7a9a6a', accent: '#9be36a', fog: '#5d7358', fogDensity: 0.0038,
       ground: { base: '#4f6b3a', alt: '#3e5730', rock: '#5a6350', path: '#5f5432', cliff: '#33452a' },
-      weather: 'fog', cycle: true, sunStart: 0.3,
+      weather: 'fog', cycle: true, sunStart: 0.3, mottle: 0.3,
       props: { trees: 'dead', treeCount: 86, rocks: 24, bushes: 30, reeds: 44, water: 'swamp', gravestones: 24, village: 0, castle: null, ruins: 14, torches: 6, wisps: 14 }
     },
     chapter7: {
@@ -113,7 +113,7 @@
       grade: { colour: '#a45cff', alpha: 0.13, blend: 'overlay' },
       id: 'chapter9', name: 'Shadow Realm',
       skyTop: '#1a1530', skyBottom: '#5c4a8a', accent: '#c46bff', fog: '#241c40', fogDensity: 0.0032,
-      weather: 'void', cycle: false, sunStart: 0.5,
+      weather: 'void', cycle: false, sunStart: 0.5, mottle: 0.3,
       ground: { base: '#2f2850', alt: '#251f42', rock: '#3a3358', path: '#403862', cliff: '#1b1633' },
       props: { trees: 'void', treeCount: 34, rocks: 40, crystals: 34, floating: 18, ruins: 20, torches: 6, wisps: 20, castle: null, village: 0, pillars: 16 }
     },
@@ -213,8 +213,13 @@
     return function materialAt(x, z, h) {
       const alt = Noise.fbm(x / 210, z / 210, 77, 3);
       const mottle = Noise.value(x / 58, z / 58, 91);
+      const patch = Noise.fbm(x / 150, z / 150, 133, 2);
       const base = Colour.mix(g.base, g.alt, clamp(alt * 0.9 - 0.1, 0, 1));
-      let colour = Colour.mix(base, g.base, mottle * 0.18);
+      // strong-but-soft material patches so big flats (caverns, void, snow,
+      // swamp) still read as ground instead of empty colour
+      let colour = Colour.mix(base, g.base, mottle * (theme_.mottle || 0.18));
+      colour = Colour.mix(colour, g.alt, clamp((patch - 0.42) * 2.1, 0, 1) * 0.3);
+      colour = Colour.mix(colour, g.rock, clamp((0.34 - patch) * 2.4, 0, 1) * 0.22);
       // Continuous ramps (grass → rock → cliff → snow). Hard height steps used to
       // paint flat white wedges wherever a hill crossed a threshold.
       if (h > 15) colour = Colour.mix(colour, g.rock, clamp((h - 15) / 30, 0, 1));
@@ -926,7 +931,7 @@
       const w = q.water;
       const dist = M.v3dist(P.cam.state.eye, v3(q.cx, q.ch, q.cz));
       const themeWater = theme_.id === 'chapter6' ? '#3f4a2a' : theme_.id === 'chapter8' ? '#ff6a2a'
-        : theme_.id === 'chapter4' ? '#cfeaf7' : theme_.id === 'chapter3' ? '#1d2a3a' : '#2f5f8a';
+        : theme_.id === 'chapter4' ? '#7fc8e8' : theme_.id === 'chapter3' ? '#1d2a3a' : '#2f5f8a';
       const shimmer = 0.5 + 0.5 * Math.sin(time * 1.7 + q.cx * 0.05 + q.cz * 0.07);
       const y = q.ch - 0.6 + Math.sin(time * 0.9 + q.cx * 0.02) * 0.18;
       const base = Colour.toRgb(Colour.mix(themeWater, theme_.skyBottom, 0.22 + shimmer * 0.18));

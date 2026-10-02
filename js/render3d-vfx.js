@@ -129,7 +129,7 @@
         const ranged = player.attackType === 'ranged';
         const magic = player.attackType === 'magic';
         const element = magic ? elementFor({ id: player.classId }) : 'steel';
-        swing(player, ranged ? 'steel' : element, { radius: ranged ? 18 : 36, life: ranged ? 0.22 : 0.3, y: ranged ? 14 : 17 });
+        swing(player, ranged ? 'steel' : element, { radius: ranged ? 12 : 20, life: ranged ? 0.22 : 0.3, y: ranged ? 15 : 19, arc: Math.PI * 0.85 });
         if (ranged) burstEffect(player.pos.x, player.pos.y, '#ffe6a0', { count: 5, y: 14, rise: 8 });
         if (magic) burstEffect(player.pos.x, player.pos.y, ELEMENTS[element].glow, { count: 7, y: 18, rise: 14 });
       });
@@ -140,7 +140,7 @@
         if (!player) return;
         const element = elementFor(skill, player);
         const target = payload.target || (root.Mythara.Game.aliveEnemies()[0] || null);
-        swing(player, element, { radius: skill && skill.ultimate ? 60 : 44, life: 0.6, arc: TAU });
+        swing(player, element, { radius: skill && skill.ultimate ? 42 : 30, life: 0.6, arc: TAU });
         if (target && skill && skill.kind === 'projectile') beam(player, target, element, { life: 0.3, width: 2.4 });
         if (target && skill && (skill.kind === 'meleeStrike' || skill.kind === 'dash')) beam(player, target, element, { life: 0.18, width: 4 });
         if (skill && (skill.kind === 'aoeSelf' || skill.ultimate)) {
@@ -253,7 +253,7 @@
       const seen = {};
       for (let i = 0; i < monsters.length; i++) {
         const m = monsters[i];
-        if (!m || !m.id === undefined) continue;
+        if (!m) continue;
         const key = m.uid || (m.enemyId + ':' + i);
         seen[key] = true;
         const prev = hpCache[key];

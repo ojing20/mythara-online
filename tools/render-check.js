@@ -57,11 +57,21 @@ const STAGE = args.stage || (SCENE === 'boss' ? 'c1-5' : 'c1-1');
   const shots = [];
   const at = [1, 8, Math.round(FRAMES * 0.4), Math.round(FRAMES * 0.75), FRAMES - 1];
   const times = [];
+  const swing = () => { h.attack(); h.key('Space', false); };
+
   for (let i = 0; i < FRAMES; i++) {
     times.push(h.step(16.7));
     h.Render3D.tickHud(0.0167, h.Game.state);
-    if (args.combat && i % 11 === 5) h.attack();
-    if (args.combat && i % 11 === 6) h.attack();
+    if (args.combat) {
+      // walk into melee range, then swing on the real input path so swings,
+      // impacts, damage numbers and monster reactions all appear
+      const target = h.nearestMonster();
+      if (target) {
+        const dist = Math.sqrt(Math.pow(target.pos.x - h.Game.state.player.pos.x, 2) + Math.pow(target.pos.y - h.Game.state.player.pos.y, 2));
+        if (dist > 46) { if (i % 4 === 0) h.approach(target, { frames: 3, range: 44 }); }
+        else if (i % 14 === 6 || i % 14 === 9) swing();
+      }
+    }
     if (at.indexOf(i) >= 0) {
       shots.push(h.shot(path.join(OUT, SCENE + '-f' + String(i).padStart(3, '0') + '.png')));
     }

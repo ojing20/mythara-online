@@ -27,6 +27,30 @@ const { buildInlineHtml } = require('./inline');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* jsdom canvases ↔ real Skia canvases.
+ * The game draws one canvas into another (`ctx.drawImage(offscreen, …)`), which
+ * a browser does happily but @napi-rs/canvas rejects when handed a jsdom
+ * element. Translate the argument so the legacy 2D renderer can be exercised
+ * headlessly too. */
+const elementCanvas = new WeakMap();
+let drawImagePatched = false;
+function patchDrawImage() {
+  if (drawImagePatched) return;
+  drawImagePatched = true;
+  const proto = Object.getPrototypeOf(createCanvas(2, 2).getContext('2d'));
+  const original = proto.drawImage;
+  proto.drawImage = function (source) {
+    const args = Array.prototype.slice.call(arguments);
+    const mapped = elementCanvas.get(source);
+    if (mapped) args[0] = mapped;
+    for (let i = 1; i < args.length; i++) {
+      const m2 = elementCanvas.get(args[i]);
+      if (m2) args[i] = m2;
+    }
+    return original.apply(this, args);
+  };
+}
+
 /**
  * @param {object} [o]
  * @param {string} [o.quality]  low | medium | high | auto (URL flag)
@@ -40,6 +64,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 async function createHarness(o) {
   const opts = Object.assign({ quality: 'high', width: 960, height: 540 }, o || {});
+  patchDrawImage();
   const canvasMap = new WeakMap();
   const rafQueue = [];
   const errors = [];
@@ -53,6 +78,7 @@ async function createHarness(o) {
       const canvas = createCanvas(Math.max(2, el.width), Math.max(2, el.height));
       entry = { w: el.width, h: el.height, canvas: canvas, ctx: canvas.getContext('2d') };
       canvasMap.set(el, entry);
+      elementCanvas.set(el, canvas);
     }
     return entry;
   }
@@ -163,6 +189,50 @@ async function createHarness(o) {
     const event = new win.KeyboardEvent(down === false ? 'keyup' : 'keydown', { code: code, key: code, bubbles: true });
     doc.dispatchEvent(event);
     return event;
+  }
+
+  /**
+   * Walk the hero toward a point using the real keyboard input path.
+   * Returns the distance left when it stopped (<= the requested range on arrival).
+   */
+  function approach(target, o2) {
+    const o = o2 || {};
+    const frames = o.frames || 140;
+    const range = o.range || 44;
+    const keys = [];
+    const press = (code) => { if (keys.indexOf(code) === -1) { keys.push(code); key(code); } };
+    for (let i = 0; i < frames; i++) {
+      const p = Game.state.player;
+      if (!p) break;
+      const tx = target.pos ? target.pos.x : target.x;
+      const ty = target.pos ? target.pos.y : target.y;
+      const dx = tx - p.pos.x, dy = ty - p.pos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist <= range) break;
+      const want = [];
+      if (Math.abs(dx) > 10) want.push(dx > 0 ? 'KeyD' : 'KeyA');
+      if (Math.abs(dy) > 10) want.push(dy > 0 ? 'KeyS' : 'KeyW');
+      want.forEach(press);
+      step(16.7);
+      try { Render3D.tickHud(0.0167, Game.state); } catch (e) { errors.push('hud: ' + e.stack); }
+    }
+    keys.forEach((code) => key(code, false));
+    const p2 = Game.state.player;
+    if (!p2) return Infinity;
+    const tx2 = target.pos ? target.pos.x : target.x;
+    const ty2 = target.pos ? target.pos.y : target.y;
+    return Math.sqrt((tx2 - p2.pos.x) * (tx2 - p2.pos.x) + (ty2 - p2.pos.y) * (ty2 - p2.pos.y));
+  }
+
+  /** Nearest living monster (the usual combat target). */
+  function nearestMonster() {
+    const p = Game.state.player;
+    const alive = (Game.state.monsters || []).filter(function (m) { return m.alive; });
+    if (!p || !alive.length) return null;
+    return alive.slice().sort(function (a, b) {
+      return ((a.pos.x - p.pos.x) * (a.pos.x - p.pos.x) + (a.pos.y - p.pos.y) * (a.pos.y - p.pos.y)) -
+        ((b.pos.x - p.pos.x) * (b.pos.x - p.pos.x) + (b.pos.y - p.pos.y) * (b.pos.y - p.pos.y));
+    })[0];
   }
 
   /** Queue a player attack through the real keyboard input path. */
@@ -308,6 +378,7 @@ async function createHarness(o) {
     App, Game, Account, Render3D, Enemies,
     wait, pump, step, resize, sizeCanvas, dismissModal, key, attack, move,
     signIn, createHero, unlockThrough, enterScene, setTime, setQuality,
+    approach, nearestMonster,
     shot, shotElement, stats, profile, resetProfile, summary,
     close() { try { dom.window.close(); } catch (e) { /* jsdom already gone */ } }
   };

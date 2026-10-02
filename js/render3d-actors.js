@@ -536,7 +536,8 @@
       cycleOut: moving ? Math.cos(walk * (state === 'run' ? 9 : 6)) : Math.cos(time * 1.6 + (monster.bob || 0)) * 0.25,
       bob: moving ? Math.abs(Math.sin(walk * (state === 'run' ? 9 : 6))) * 0.9 : Math.sin(time * 1.9 + (monster.bob || 0)) * 0.4,
       lunge: lunge,
-      telegraph: monster.telegraphMs ? clamp(1 - monster.telegraphMs / 900, 0, 1) : 0,
+      telegraph: monster.telegraphMs ? clamp(1 - monster.telegraphMs / (monster.telegraphTotal || 900), 0, 1) : 0,
+      telegraphRadius: monster.telegraphRadius || 0,
       hurt: hurt,
       dead: dead,
       death: dead ? clamp(monster.deathTimer !== undefined ? 1 - monster.deathTimer : 1, 0, 1) : 0,
@@ -555,6 +556,7 @@
     const body = { alpha: opts.alpha, tint: opts.tint, trim: def.armored ? '#c9d2e0' : undefined };
     const swing = a.lunge;
     const walkSwing = a.cycle * (a.moving ? 0.7 : 0.12);
+    const windup = a.telegraph || 0;             // 0 → just started, 1 → about to strike
 
     // legs
     [-1, 1].forEach(function (side) {
@@ -563,19 +565,19 @@
       part(P, node(leg, v3(0, -4.4, 0.4), v3(0, 0, 0)), v3(2.8, 2.0, 3.6), { all: Colour.shade(c.dark, -0.35) }, body);
     });
     // torso
-    const torso = node(root, v3(0, 9.4, 0), v3(a.lunge * -0.18, 0, 0));
+    const torso = node(root, v3(0, 9.4, 0), v3(a.lunge * -0.18 - windup * 0.22, 0, 0));
     part(P, torso, v3(5.4, 8.0, 3.6), { front: c.primary, back: c.secondary, side: c.secondary }, body);
     if (def.armored) part(P, node(torso, v3(0, 1.4, 0.4), v3(0, 0, 0)), v3(6.0, 3.4, 4.2), { all: c.secondary, trim: '#c9d2e0' }, body);
     part(P, node(torso, v3(0, -4.4, 0), v3(0, 0, 0)), v3(5.8, 2.0, 3.8), { all: c.dark }, body);
     // arms
     [-1, 1].forEach(function (side) {
-      const armSwing = swing * (side > 0 ? -1.4 : 0.7) + walkSwing * (side > 0 ? -1 : 1);
+      const armSwing = swing * (side > 0 ? -1.4 : 0.7) + walkSwing * (side > 0 ? -1 : 1) - windup * (side > 0 ? 2.1 : 1.2);
       const shoulder = node(torso, v3(side * 3.4, 3.0, 0), v3(armSwing, 0, side * 0.2));
       part(P, shoulder, v3(2.2, 3.6, 2.2), { all: c.primary }, body);
       const fore = node(shoulder, v3(0, -4.2, 0), v3(-0.3 - Math.max(0, swing) * 0.6, 0, 0));
       part(P, fore, v3(2.0, 3.6, 2.0), { all: c.secondary }, body);
       if (side > 0 && def.weapon) {
-        drawWeapon(P, node(fore, v3(0, -2.6, 0), v3(0.3, 0, 0)), def.weapon, c, { trim: '#c9d2e0', glow: a.telegraph > 0.3, glowColour: def.aura || c.accent });
+        drawWeapon(P, node(fore, v3(0, -2.6, 0), v3(0.3 - windup * 0.5, 0, 0)), def.weapon, c, { trim: '#c9d2e0', glow: a.telegraph > 0.05, glowColour: def.aura || c.accent });
       }
     });
     // head + horns + crown
@@ -955,6 +957,21 @@
         default: drawHumanoid(P, actor, a, tintOpts); break;
       }
 
+      // telegraphed ability: a filling ground disc + pulsing ring, so the
+      // player can read the area before the boss lands the hit
+      if (a.telegraph > 0 && !a.dead) {
+        const radius = a.telegraphRadius || (actor.radius || 18) * 4;
+        const grow = 0.35 + a.telegraph * 0.65;
+        P.ellipseGround(actor.pos.x, actor.pos.y, radius * grow, radius * grow * 0.62, '#ff6b4a', 0.16 + a.telegraph * 0.2, 0.6);
+        S.ring(P, {
+          x: actor.pos.x, z: actor.pos.y, radius: radius * grow, thickness: 3.4,
+          color: '#ff9a6a', alpha: 0.55 + a.telegraph * 0.4, segments: 30
+        });
+        S.ring(P, {
+          x: actor.pos.x, z: actor.pos.y, radius: radius * (0.25 + a.telegraph * 0.6), thickness: 2,
+          color: '#ffd0a0', alpha: 0.35, segments: 24
+        });
+      }
       // boss aura + telegraph marker
       const def = actor.def || {};
       if (def.aura) {
