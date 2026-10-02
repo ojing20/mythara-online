@@ -31,9 +31,9 @@
 
   const DAY_SECONDS = 300;                      // one full cycle when the region animates time
   const QUALITY_PRESETS = {
-    high: { level: 3, renderScale: 1, propDist: 1700, terrainDist: 1500, detailDist: 360, maxActors: 40, weatherScale: 1 },
-    medium: { level: 2, renderScale: 0.85, propDist: 1250, terrainDist: 1200, detailDist: 270, maxActors: 30, weatherScale: 0.7 },
-    low: { level: 1, renderScale: 0.68, propDist: 900, terrainDist: 900, detailDist: 190, maxActors: 22, weatherScale: 0.45 }
+    high: { level: 3, renderScale: 1, propDist: 1450, terrainDist: 1500, detailDist: 330, maxActors: 40, weatherScale: 1 },
+    medium: { level: 2, renderScale: 0.85, propDist: 1050, terrainDist: 1100, detailDist: 240, maxActors: 30, weatherScale: 0.7 },
+    low: { level: 1, renderScale: 0.68, propDist: 760, terrainDist: 820, detailDist: 170, maxActors: 22, weatherScale: 0.45 }
   };
 
   const Render3D = (function () {
@@ -60,6 +60,7 @@
       showNames: true,
       manualZoom: false,
       dragState: null,
+      footstep: { x: 0, z: 0, dist: 0, inWater: false },
       pinch: null,
       bound: false,
       minimapTimer: 0,
@@ -83,9 +84,6 @@
     function attach(canvas) {
       if (!canvas || !canvas.getContext) return null;
       const opts = optionsFromUrl();
-      if (opts.quality === 'auto' || !QUALITY_PRESETS[opts.quality]) {
-        state.qualityLevel = QUALITY_PRESETS[detectStartQuality()];
-      }
       if (opts.render2d) { state.enabled = false; return null; }
       const context2d = canvas.getContext ? canvas.getContext('2d') : null;
       if (!context2d) return null;                     // no canvas support → keep the 2D fallback
@@ -110,12 +108,24 @@
       return state.ctx;
     }
 
+    /**
+     * Point actors + combat VFX at the active height field so nothing hovers.
+     * Called whenever the region changes (worlds are cached per theme).
+     */
+    function attachGround(world) {
+      const sample = world && world.heightAt ? function (x, z) { return world.heightAt(x, z); } : null;
+      if (Actors && Actors.setGround) Actors.setGround(sample);
+      if (VFX && VFX.setGround) VFX.setGround(sample);
+      if (state.camera) state.camera.groundAt = sample;
+    }
+
     function useWorld(theme_) {
       const id = theme_.id;
       if (state.worldId === id && state.world) return state.world;
       state.world = World.createWorld(theme_);
       state.worldId = id;
       state.theme = theme_;
+      attachGround(state.world);
       return state.world;
     }
 
@@ -134,21 +144,6 @@
       state.timeOfDay = clamp(t, 0, 1);
       if (cycle !== undefined) state.cycle = !!cycle;
       return state.timeOfDay;
-    }
-
-    /**
-     * Starting quality for 'auto': phones start lower and the adaptive loop
-     * promotes them if frames are fast, instead of janking at 'high' first.
-     */
-    function detectStartQuality() {
-      const nav = root.navigator || {};
-      const coarse = !!(root.matchMedia && root.matchMedia('(pointer: coarse)').matches);
-      const small = Math.min(root.innerWidth || 960, root.innerHeight || 540) < 520;
-      const dpr = root.devicePixelRatio || 1;
-      const cores = nav.hardwareConcurrency || 8;   // assume unknown devices are fine
-      if (dpr >= 3 || (coarse && small)) return 'low';
-      if (coarse || small || dpr >= 2 || cores <= 4) return 'medium';
-      return 'high';
     }
 
     function setQuality(mode) {
@@ -314,11 +309,13 @@
         if (!state.manualZoom && Math.abs(camDist - want) > 6) {
           state.camera.setDist(camDist + (want - camDist) * clamp(step * 1.4, 0, 1));
         }
+        const groundY = world.heightAt(player.pos.x, player.pos.y);
         state.camera.follow(player, step, {
           facing: player.facing,
           target: state.lockTarget,
           keepYaw: state.manualZoom,
-          lift: 22
+          lift: 22,
+          groundY: groundY
         });
       } else {
         state.camera.updateEye();
@@ -345,15 +342,18 @@
       t0 = prof ? clock() : 0;
       if (!SKIP.road && world.drawRoad) world.drawRoad(P, time);
       if (!SKIP.detail) world.drawDetail(P, state.camera, state.qualityLevel.detailDist || 340);
+      if (!SKIP.detail && world.drawAmbient) world.drawAmbient(P);      // fireflies / leaves
       mark('ground', t0);
       t0 = prof ? clock() : 0;
 
+      if (player && gameState.screen === 'game') footstepEffects(world, player, step);
       VFX.update(step, gameState);
       world.updateWeather(step, time);
+      if (world.updateAmbient) world.updateAmbient(step, time);
 
       // actors + props + effects share one depth-sorted list
       if (player && gameState.screen === 'game') {
-        world.drawProps(P, time, state.camera);
+        world.drawProps(P, time, state.camera, state.qualityLevel.propDist, Math.min(560, state.qualityLevel.propDist), state.qualityLevel.level);
         drawActors(P, gameState, player, aliveMonsters, time);
         VFX.drawProjectiles(P, time);
         VFX.draw(P, time);
@@ -402,6 +402,38 @@
       return true;
     }
 
+    /**
+     * Footstep feedback: small dust puffs on dry ground, splashes in water.
+     * Purely cosmetic and rate-limited by distance travelled, so it costs
+     * nothing while standing still.
+     */
+    function footstepEffects(world, player, dt) {
+      const f = state.footstep;
+      const dx = player.pos.x - f.x, dz = player.pos.y - f.z;
+      const moved = Math.sqrt(dx * dx + dz * dz);
+      f.x = player.pos.x;
+      f.z = player.pos.y;
+      if (dt <= 0) return;
+      const inWater = world.waterDepth ? world.waterDepth(player.pos.x, player.pos.y) > 0.08 : false;
+      f.dist += moved;
+      const stride = inWater ? 26 : 20;
+      if (f.dist < stride) return;
+      f.dist = 0;
+      const moving = (player.moving || (player.anim && player.anim.current === 'walk') || (player.anim && player.anim.current === 'run'));
+      if (!moving) return;
+      const groundY = world.heightAt ? world.heightAt(player.pos.x, player.pos.y) : 0;
+      const back = player.facing ? -player.facing.x * 6 : 0;
+      const backZ = player.facing ? -player.facing.y * 6 : 0;
+      if (inWater) {
+        VFX.burstEffect(player.pos.x + back, player.pos.y + backZ, '#cfe9ff', { count: 5, y: 4, rise: 8, spread: 12, life: 0.45 });
+        VFX.ringEffect(player.pos.x, player.pos.y, '#bfe4f5', { radius: 26, thickness: 3, life: 0.4 });
+      } else {
+        VFX.burstEffect(player.pos.x + back, player.pos.y + backZ, '#cbb894', { count: 3, y: 1.5, rise: 5, spread: 9, life: 0.4 });
+      }
+      void groundY;
+      f.inWater = inWater;
+    }
+
     function drawActors(P, gameState, player, aliveMonsters, time) {
       const list = [];
       for (let i = 0; i < aliveMonsters.length; i++) list.push(aliveMonsters[i]);
@@ -438,7 +470,7 @@
       if (state.frameTime > 34 && level > 1) {
         state.qualityLevel = QUALITY_PRESETS[level === 3 ? 'medium' : 'low'];
         resize();
-      } else if (state.frameTime < 15 && level < 3) {
+      } else if (state.frameTime < 20 && level < 3) {
         state.qualityLevel = QUALITY_PRESETS[level === 1 ? 'medium' : 'high'];
         resize();
       }

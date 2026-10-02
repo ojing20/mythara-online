@@ -341,6 +341,11 @@
       const cp = Math.cos(cam.pitch);
       const offset = v3(Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), Math.cos(cam.yaw) * cp);
       cam.eye = v3add(cam.look, v3mul(offset, cam.dist));
+      // never let the camera sink into a hill: clamp the eye above the terrain
+      if (cam.groundAt) {
+        const floor = cam.groundAt(cam.eye.x, cam.eye.z) + 8;
+        if (cam.eye.y < floor) cam.eye.y = floor;
+      }
 
       const forward = v3norm(v3sub(cam.look, cam.eye));
       let right = v3cross(forward, v3(0, 1, 0));
@@ -377,7 +382,7 @@
       const lookEase = clamp((dt || 0.016) * 9, 0, 1);
       cam.look.x = lerp(cam.look.x, actor.pos.x, lookEase);
       cam.look.z = lerp(cam.look.z, actor.pos.y, lookEase);
-      const lookHeight = lift + (actor.kind === 'monster' ? actor.scale * 8 : 0);
+      const lookHeight = (o.groundY || 0) + lift + (actor.kind === 'monster' ? actor.scale * 8 : 0);
       cam.look.y = lerp(cam.look.y, lookHeight, lookEase);
 
       if (cam.manualHold > 0) cam.manualHold -= (dt || 0.016);
@@ -463,6 +468,7 @@
       theme: null,
       list: [],
       stats: { polys: 0, deferred: 0, skipped: 0, fills: 0 },
+      tag: null, tagStats: {},
       clip: null
     };
 
@@ -481,14 +487,24 @@
 
     /** Queue a drawable; `depth` decides paint order (far first). */
     function add(depth, fn) {
-      P.list.push({ depth: depth, fn: fn });
+      P.list.push({ depth: depth, fn: fn, tag: P.tag || 'misc' });
       P.stats.deferred++;
     }
+
+    /**
+     * Development-only accounting: marks subsequent fills with a name so the
+     * render harness can report where the polygons go. No cost when unused.
+     */
+    function tag(name) { P.tag = name; }
 
     function flush() {
       const list = P.list;
       if (list.length > 1) list.sort(function (a, b) { return b.depth - a.depth; });
-      for (let i = 0; i < list.length; i++) list[i].fn();
+      for (let i = 0; i < list.length; i++) {
+        P.tag = list[i].tag;                 // exact per-layer fill accounting
+        list[i].fn();
+      }
+      P.tag = null;
       list.length = 0;
     }
 
@@ -557,6 +573,7 @@
         c.fill();
         if (t) t.push(nowMs());
         P.stats.fills++;
+        if (P.tag) P.tagStats[P.tag] = (P.tagStats[P.tag] || 0) + 1;
       }
       if (st.glow) {
         c.save();
@@ -816,6 +833,7 @@
       project: project,
       poly3: poly3,
       polyScreen: polyScreen,
+      tag: tag,
       fogMix: fogMix,
       lightAmount: lightAmount,
       ellipseGround: ellipseGround,

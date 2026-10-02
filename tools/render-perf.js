@@ -60,6 +60,7 @@ function percentile(sorted, p) {
     h.resetProfile();
   }
 
+  const tagStats = Object.assign({}, h.Render3D.painter.state.tagStats || {});
   const sorted = times.slice().sort((a, b) => a - b);
   const sectionAvg = {};
   SECTIONS.forEach((k) => { sectionAvg[k] = +(sectionTotals[k] / FRAMES).toFixed(2); });
@@ -76,6 +77,7 @@ function percentile(sorted, p) {
     framesOver60ms: over(60),
     sectionMs: sectionAvg,
     stats: h.stats(),
+    fillsByLayer: tagStats,
     errors: h.errors.slice(0, 2),
     consoleErrors: h.consoleErrors.slice(0, 2)
   };
@@ -89,6 +91,8 @@ function percentile(sorted, p) {
     rows.forEach((r) => { console.log('  ' + r[0].padEnd(9) + r[1].toFixed(2) + ' ms/frame'); });
     console.log('  ' + 'total'.padEnd(9) + sectionAvg.total.toFixed(2) + ' ms/frame (render only)');
     if (report.stats) console.log('polys ' + report.stats.polys + '  fills ' + report.stats.fills + '  deferred ' + report.stats.deferred);
+    const layers = Object.keys(tagStats).map((k) => [k, tagStats[k]]).sort((a, b) => b[1] - a[1]);
+    if (layers.length) console.log('fills/frame by layer: ' + layers.map((r) => r[0] + ' ' + (r[1] / FRAMES).toFixed(0)).join(' · '));
   }
   h.close();
   process.exit(report.errors.length ? 1 : 0);

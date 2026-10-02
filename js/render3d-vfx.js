@@ -52,6 +52,14 @@
   }
 
   const VFX = (function () {
+    /**
+     * Ground sampler — combat visuals anchor to the height field so impacts,
+     * rings, decals and spell bursts sit on the terrain instead of a flat y = 0.
+     */
+    let groundSample = null;
+    function setGround(fn) { groundSample = typeof fn === 'function' ? fn : null; }
+    function gy(x, z) { return groundSample ? groundSample(x, z) : 0; }
+
     /** effect kinds keep their own update/draw behaviour */
     const effects = [];
     const decals = [];
@@ -74,7 +82,7 @@
       return spawn({
         kind: 'swing', life: o.life || 0.34, actor: actor, element: kind,
         radius: o.radius || 34, arc: o.arc || Math.PI * 1.25, spin: o.spin || 0,
-        y: o.y === undefined ? 16 : o.y, follow: o.follow !== false
+        y: gy(actor && actor.pos ? actor.pos.x : 0, actor && actor.pos ? actor.pos.y : 0) + (o.y === undefined ? 16 : o.y), follow: o.follow !== false
       });
     }
 
@@ -82,13 +90,13 @@
       const o = opts || {};
       return spawn({
         kind: 'impact', life: o.life || 0.45, x: x, z: z, element: element || 'steel',
-        size: o.size || 1, crit: !!o.crit, y: o.y === undefined ? 14 : o.y
+        size: o.size || 1, crit: !!o.crit, y: gy(x, z) + (o.y === undefined ? 14 : o.y)
       });
     }
 
     function burstEffect(x, z, colour, opts) {
       const o = opts || {};
-      return spawn({ kind: 'burst', life: o.life || 0.7, x: x, z: z, colour: colour || '#ffffff', count: o.count || 10, spread: o.spread || 26, y: o.y === undefined ? 10 : o.y, rise: o.rise || 16 });
+      return spawn({ kind: 'burst', life: o.life || 0.7, x: x, z: z, colour: colour || '#ffffff', count: o.count || 10, spread: o.spread || 26, y: gy(x, z) + (o.y === undefined ? 10 : o.y), rise: o.rise || 16 });
     }
 
     function ringEffect(x, z, colour, opts) {
@@ -129,7 +137,7 @@
         const ranged = player.attackType === 'ranged';
         const magic = player.attackType === 'magic';
         const element = magic ? elementFor({ id: player.classId }) : 'steel';
-        swing(player, ranged ? 'steel' : element, { radius: ranged ? 12 : 20, life: ranged ? 0.22 : 0.3, y: ranged ? 15 : 19, arc: Math.PI * 0.85 });
+        swing(player, ranged ? 'steel' : element, { radius: ranged ? 18 : 36, life: ranged ? 0.22 : 0.3, y: ranged ? 14 : 17 });
         if (ranged) burstEffect(player.pos.x, player.pos.y, '#ffe6a0', { count: 5, y: 14, rise: 8 });
         if (magic) burstEffect(player.pos.x, player.pos.y, ELEMENTS[element].glow, { count: 7, y: 18, rise: 14 });
       });
@@ -140,7 +148,7 @@
         if (!player) return;
         const element = elementFor(skill, player);
         const target = payload.target || (root.Mythara.Game.aliveEnemies()[0] || null);
-        swing(player, element, { radius: skill && skill.ultimate ? 42 : 30, life: 0.6, arc: TAU });
+        swing(player, element, { radius: skill && skill.ultimate ? 60 : 44, life: 0.6, arc: TAU });
         if (target && skill && skill.kind === 'projectile') beam(player, target, element, { life: 0.3, width: 2.4 });
         if (target && skill && (skill.kind === 'meleeStrike' || skill.kind === 'dash')) beam(player, target, element, { life: 0.18, width: 4 });
         if (skill && (skill.kind === 'aoeSelf' || skill.ultimate)) {
@@ -253,7 +261,7 @@
       const seen = {};
       for (let i = 0; i < monsters.length; i++) {
         const m = monsters[i];
-        if (!m) continue;
+        if (!m || !m.id === undefined) continue;
         const key = m.uid || (m.enemyId + ':' + i);
         seen[key] = true;
         const prev = hpCache[key];
@@ -284,7 +292,7 @@
     function drawDecals(P) {
       decals.forEach(function (d) {
         const alpha = clamp(d.life / d.maxLife, 0, 1) * 0.5;
-        P.ellipseGround(d.x, d.z, d.radius, d.radius * 0.6, d.colour, alpha, 0.7);
+        P.ellipseGround(d.x, d.z, d.radius, d.radius * 0.6, d.colour, alpha, gy(d.x, d.z) + 0.7);
       });
     }
 
@@ -331,7 +339,7 @@
               });
             }
             if (e.crit) {
-              S.ring(P, { x: e.x, z: e.z, radius: 26 + t * 46, thickness: 3.4, color: el.core, alpha: (1 - t) * 0.8, segments: 22, y: 1.2 });
+              S.ring(P, { x: e.x, z: e.z, radius: 26 + t * 46, thickness: 3.4, color: el.core, alpha: (1 - t) * 0.8, segments: 22, y: gy(e.x, e.z) + 1.2 });
               P.label(v3(e.x, e.y + 22 + t * 6, e.z), 'CRIT', { color: '#ffd76a', size: 13 - t * 3, weight: '900', alpha: (1 - t) * 0.9 });
             }
             break;
@@ -350,7 +358,7 @@
           case 'ring': {
             S.ring(P, {
               x: e.x, z: e.z, radius: e.radius * (0.35 + t * 0.75), thickness: e.thickness * (1 - t * 0.5),
-              color: e.colour, alpha: (1 - t) * 0.7, segments: 30, y: 1.0
+              color: e.colour, alpha: (1 - t) * 0.7, segments: 30, y: gy(e.x, e.z) + 1.0
             });
             break;
           }
@@ -369,13 +377,13 @@
               ));
             }
             S.ribbon(P, points, { width: e.width, color: el.core, color2: el.glow, alpha: (1 - t) * 0.95, blend: 'lighter' });
-            S.billboard(P, { pos: v3(to.x, 14, to.y), width: 12, height: 12, color: el.glow, alpha: (1 - t) * 0.6, soft: true });
+            S.billboard(P, { pos: v3(to.x, gy(to.x, to.y) + 14, to.y), width: 12, height: 12, color: el.glow, alpha: (1 - t) * 0.6, soft: true });
             break;
           }
           case 'pillar': {
             const alpha = Math.sin(t * Math.PI);
             S.billboard(P, { pos: v3(e.x, 24, e.z), width: 22, height: 46 + t * 20, color: e.colour, alpha: alpha * 0.5, soft: true });
-            S.ring(P, { x: e.x, z: e.z, radius: 30 + t * 20, thickness: 4, color: e.colour, alpha: alpha * 0.7, segments: 24, y: 1.1 });
+            S.ring(P, { x: e.x, z: e.z, radius: 30 + t * 20, thickness: 4, color: e.colour, alpha: alpha * 0.7, segments: 24, y: gy(e.x, e.z) + 1.1 });
             break;
           }
           case 'portal': {
@@ -383,7 +391,7 @@
             for (let i = 0; i < 3; i++) {
               S.ring(P, {
                 x: e.x, z: e.z, radius: 16 + i * 12 + t * 20, thickness: 3,
-                color: e.colour, alpha: alpha * (0.7 - i * 0.15), segments: 24, phase: time * (1 + i * 0.4), y: 1 + i * 4
+                color: e.colour, alpha: alpha * (0.7 - i * 0.15), segments: 24, phase: time * (1 + i * 0.4), y: gy(e.x, e.z) + 1 + i * 4
               });
             }
             S.billboard(P, { pos: v3(e.x, 8 + t * 10, e.z), width: 22, height: 26, color: e.colour, alpha: alpha * 0.5, soft: true });
@@ -402,11 +410,12 @@
         const life = clamp(f.life / (f.maxLife || 1), 0, 1);
         const crit = (f.size || 0) >= 19;
         const z = f.y + 58;
+        const fy = gy(f.x, f.y);
         S.billboard(P, {
-          pos: v3(f.x, 26 + (1 - life) * 22, z), width: crit ? 10 : 6, height: crit ? 10 : 6,
+          pos: v3(f.x, fy + 26 + (1 - life) * 22, z), width: crit ? 10 : 6, height: crit ? 10 : 6,
           color: crit ? '#ffd76a' : (f.color || '#ffffff'), alpha: life * 0.22 * (crit ? 1.5 : 1), soft: true
         });
-        P.label(v3(f.x, 28 + (1 - life) * 24, z), f.text, {
+        P.label(v3(f.x, fy + 28 + (1 - life) * 24, z), f.text, {
           color: f.color || '#ffffff', size: crit ? 20 : 15, weight: crit ? '900' : '700',
           alpha: Math.min(1, life * 1.6)
         });
@@ -421,7 +430,7 @@
         const p = particles[i];
         const life = clamp(p.life / (p.maxLife || 1), 0, 1);
         S.billboard(P, {
-          pos: v3(p.x, 8 + (1 - life) * 12, p.y), width: (p.size || 3) * 1.6, height: (p.size || 3) * 1.6,
+          pos: v3(p.x, gy(p.x, p.y) + 8 + (1 - life) * 12, p.y), width: (p.size || 3) * 1.6, height: (p.size || 3) * 1.6,
           color: p.color || '#ffffff', alpha: life * 0.8, soft: true
         });
       }
@@ -437,12 +446,12 @@
         const trail = [];
         for (let k = 0; k < 5; k++) {
           const back = k * 6;
-          trail.push(v3(pr.x - Math.cos(pr.angle) * back, 14, pr.y - Math.sin(pr.angle) * back));
+          trail.push(v3(pr.x - Math.cos(pr.angle) * back, gy(pr.x, pr.y) + 12, pr.y - Math.sin(pr.angle) * back));
         }
         S.ribbon(P, trail, { width: style === 'arrow' ? 1.2 : 3.4, color: colour, color2: '#ffffff', alpha: 0.45, blend: 'lighter' });
-        S.billboard(P, { pos: v3(pr.x, 14, pr.y), width: style === 'arrow' ? 4 : 8, height: style === 'arrow' ? 4 : 8, color: colour, alpha: 0.85, soft: true });
+        S.billboard(P, { pos: v3(pr.x, gy(pr.x, pr.y) + 12, pr.y), width: style === 'arrow' ? 4 : 8, height: style === 'arrow' ? 4 : 8, color: colour, alpha: 0.85, soft: true });
         if (style !== 'arrow') {
-          S.billboard(P, { pos: v3(pr.x, 14, pr.y), width: 20, height: 20, color: colour, alpha: 0.22 + Math.sin(time * 20 + i) * 0.06, soft: true });
+          S.billboard(P, { pos: v3(pr.x, gy(pr.x, pr.y) + 12, pr.y), width: 20, height: 20, color: colour, alpha: 0.22 + Math.sin(time * 20 + i) * 0.06, soft: true });
         }
       }
     }
@@ -451,6 +460,8 @@
     function count() { return effects.length; }
 
     return {
+      setGround: setGround,
+      groundAt: gy,
       install: install,
       update: update,
       draw: draw,

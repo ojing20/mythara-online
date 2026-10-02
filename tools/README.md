@@ -9,11 +9,12 @@ its "no dependencies, no build step" rule.
 
 ## Requirements
 
-The tools need two dev-only packages (declared in `tools/package.json`):
+The tools need two dev-only packages (installed anywhere and pointed at with `NODE_PATH`, or in a
+local `node_modules/`):
 
 ```bash
-npm --prefix tools install          # jsdom + @napi-rs/canvas
-# ...or install them anywhere and point NODE_PATH at it
+npm install --no-save jsdom @napi-rs/canvas
+export NODE_PATH="$PWD/node_modules"
 ```
 
 `@napi-rs/canvas` provides a real Skia-backed 2D canvas inside jsdom, so the software 3D
@@ -38,6 +39,7 @@ node tools/render-check.js tools/shots --scene=hub --class=fireMage --time=0.8
 | `--quality=low\|medium\|high\|auto` | renderer quality preset |
 | `--skip=terrain,detail` | skip render sections while debugging |
 | `--no-clouds` | disable the cloud layer |
+| `--render-2d` | boot the legacy 2D renderer (regression check for the fallback path) |
 
 ## render-suite.js — batch sheets
 
@@ -45,26 +47,11 @@ node tools/render-check.js tools/shots --scene=hub --class=fireMage --time=0.8
 node tools/render-suite.js tools/shots/suite --what=chapters   # 10 chapter environments
 node tools/render-suite.js tools/shots/suite --what=bosses     # every chapter boss
 node tools/render-suite.js tools/shots/suite --what=classes    # all 10 hero previews
-node tools/render-suite.js tools/shots/suite --what=anim       # idle/walk/run/attack/skill/hit/death
-node tools/render-suite.js tools/shots/suite --what=camera     # follow, rotate, zoom, lock-on
 node tools/render-suite.js tools/shots/suite --what=combat     # swings, hub dusk/night
 node tools/render-suite.js tools/shots/suite --what=all
 ```
 
-Writes one PNG per entry plus `suite.json` with per-entry timings and any failures. The `anim`
-suite compares coarse canvas signatures and fails if two animation states render identically; the
-`camera` suite drives the real DOM event paths (mouse drag, touch drag, wheel, Q/E, R) and fails on
-any camera regression (13 checks).
-
-## gameflow-check.js — do the game systems still work?
-
-```bash
-node tools/gameflow-check.js              # 15 checks, exits non-zero on failure
-```
-
-Boots with the 3D layer enabled and drives the real flows: registration, character creation,
-stage unlock rules, adventure battle, melee damage, skill hotbar, potion use, leaving a fight,
-the app screens, save/reload and a bot arena duel.
+Writes one PNG per entry plus `suite.json` with per-entry timings and any failures.
 
 ## render-perf.js — frame cost
 
@@ -74,9 +61,13 @@ node tools/render-perf.js --stage=c8-5 --frames=120
 node tools/render-perf.js --skip=terrain,detail --json
 ```
 
-Reports median / p75 / p90 / max frame time and the per-section breakdown (sky, terrain, ground,
-actors, flush, weather, labels, post). The 3D renderer is a software rasteriser, so these numbers
+Reports median / p75 / p90 / max frame time, the per-section breakdown (sky, terrain, ground,
+actors, flush, weather, labels, post) and a `fills/frame by layer` line (props, terrain, detail,
+actors, road) for spotting hot layers. The 3D renderer is a software rasteriser, so these numbers
 are a CPU-only baseline: a real browser with a GPU-backed canvas is several times faster.
+
+Current baseline in the hub village: ≈22 ms median / p90 48 ms; chapter-1 battle: ≈23 ms median /
+p90 47 ms (960×540, high quality, `--frames=60`).
 
 ## Notes
 

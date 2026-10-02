@@ -32,6 +32,16 @@
   /* ============================================================
    * 1. HELPERS
    * ========================================================== */
+  /**
+   * Ground sampler. The world is a height field now, so every actor, shadow,
+   * plate and ring is lifted onto the terrain instead of hovering over y = 0.
+   * The facade attaches it once per world (see MytharaRender3D).
+   */
+  let groundSample = null;
+  function setGround(fn) { groundSample = typeof fn === 'function' ? fn : null; }
+  /** Ground height at a world position (0 when no world is attached). */
+  function groundAt(x, z) { return groundSample ? groundSample(x, z) : 0; }
+
   const RARITY_ORDER = { common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4, mythic: 5 };
 
   function account() {
@@ -354,7 +364,7 @@
     const classScale = actor.kind === 'duelist' ? 1 : 1;
     const SCALE = 1.58 * classScale;                      // world units per rig unit (~34u tall hero)
     const root = node(
-      mat4.compose(v3(actor.pos.x, 0.4 + pose.root.y * SCALE * 0.4, actor.pos.y), v3(pose.root.rx, facingYaw(actor) + pose.root.ry, pose.root.rz), v3(SCALE, SCALE, SCALE))
+      mat4.compose(v3(actor.pos.x, groundAt(actor.pos.x, actor.pos.y) + 0.4 + pose.root.y * SCALE * 0.4, actor.pos.y), v3(pose.root.rx, facingYaw(actor) + pose.root.ry, pose.root.rz), v3(SCALE, SCALE, SCALE))
     );
 
     const colours = {
@@ -536,8 +546,7 @@
       cycleOut: moving ? Math.cos(walk * (state === 'run' ? 9 : 6)) : Math.cos(time * 1.6 + (monster.bob || 0)) * 0.25,
       bob: moving ? Math.abs(Math.sin(walk * (state === 'run' ? 9 : 6))) * 0.9 : Math.sin(time * 1.9 + (monster.bob || 0)) * 0.4,
       lunge: lunge,
-      telegraph: monster.telegraphMs ? clamp(1 - monster.telegraphMs / (monster.telegraphTotal || 900), 0, 1) : 0,
-      telegraphRadius: monster.telegraphRadius || 0,
+      telegraph: monster.telegraphMs ? clamp(1 - monster.telegraphMs / 900, 0, 1) : 0,
       hurt: hurt,
       dead: dead,
       death: dead ? clamp(monster.deathTimer !== undefined ? 1 - monster.deathTimer : 1, 0, 1) : 0,
@@ -550,13 +559,12 @@
     const def = monster.def || {};
     const scale = (monster.scale || 1) * 1.6;
     const root = node(mat4.compose(
-      v3(monster.pos.x, 0.4 + a.bob * scale * 0.4, monster.pos.y),
+      groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * scale * 0.4,
       v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: def.armored ? '#c9d2e0' : undefined };
     const swing = a.lunge;
     const walkSwing = a.cycle * (a.moving ? 0.7 : 0.12);
-    const windup = a.telegraph || 0;             // 0 → just started, 1 → about to strike
 
     // legs
     [-1, 1].forEach(function (side) {
@@ -565,19 +573,19 @@
       part(P, node(leg, v3(0, -4.4, 0.4), v3(0, 0, 0)), v3(2.8, 2.0, 3.6), { all: Colour.shade(c.dark, -0.35) }, body);
     });
     // torso
-    const torso = node(root, v3(0, 9.4, 0), v3(a.lunge * -0.18 - windup * 0.22, 0, 0));
+    const torso = node(root, v3(0, 9.4, 0), v3(a.lunge * -0.18, 0, 0));
     part(P, torso, v3(5.4, 8.0, 3.6), { front: c.primary, back: c.secondary, side: c.secondary }, body);
     if (def.armored) part(P, node(torso, v3(0, 1.4, 0.4), v3(0, 0, 0)), v3(6.0, 3.4, 4.2), { all: c.secondary, trim: '#c9d2e0' }, body);
     part(P, node(torso, v3(0, -4.4, 0), v3(0, 0, 0)), v3(5.8, 2.0, 3.8), { all: c.dark }, body);
     // arms
     [-1, 1].forEach(function (side) {
-      const armSwing = swing * (side > 0 ? -1.4 : 0.7) + walkSwing * (side > 0 ? -1 : 1) - windup * (side > 0 ? 2.1 : 1.2);
+      const armSwing = swing * (side > 0 ? -1.4 : 0.7) + walkSwing * (side > 0 ? -1 : 1);
       const shoulder = node(torso, v3(side * 3.4, 3.0, 0), v3(armSwing, 0, side * 0.2));
       part(P, shoulder, v3(2.2, 3.6, 2.2), { all: c.primary }, body);
       const fore = node(shoulder, v3(0, -4.2, 0), v3(-0.3 - Math.max(0, swing) * 0.6, 0, 0));
       part(P, fore, v3(2.0, 3.6, 2.0), { all: c.secondary }, body);
       if (side > 0 && def.weapon) {
-        drawWeapon(P, node(fore, v3(0, -2.6, 0), v3(0.3 - windup * 0.5, 0, 0)), def.weapon, c, { trim: '#c9d2e0', glow: a.telegraph > 0.05, glowColour: def.aura || c.accent });
+        drawWeapon(P, node(fore, v3(0, -2.6, 0), v3(0.3, 0, 0)), def.weapon, c, { trim: '#c9d2e0', glow: a.telegraph > 0.3, glowColour: def.aura || c.accent });
       }
     });
     // head + horns + crown
@@ -605,7 +613,7 @@
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.55;
     const root = node(mat4.compose(
-      v3(monster.pos.x, 0.3 + a.bob * scale * 0.25, monster.pos.y),
+      groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * scale * 0.25,
       v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint };
@@ -644,7 +652,7 @@
   function drawArachnid(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.5;
-    const root = node(mat4.compose(v3(monster.pos.x, 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const abdomen = node(root, v3(0, 4.4, -3.2), v3(a.lunge * -0.1, 0, 0));
     S.blob(P, { matrix: null, pos: mat4.transformPoint(abdomen, v3(0, 0, 0)), radii: v3(4.4, 3.6, 5.0), slices: 6, rings: 3, color: c.dark, jitter: 0.12, seed: 3 });
@@ -669,7 +677,7 @@
   function drawScorpion(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.5;
-    const root = node(mat4.compose(v3(monster.pos.x, 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const torso = node(root, v3(0, 4.0, 0), v3(a.lunge * -0.12, 0, 0));
     S.blob(P, { matrix: null, pos: mat4.transformPoint(torso, v3(0, 0, -1.4)), radii: v3(4.0, 2.8, 5.4), slices: 6, rings: 3, color: c.primary, jitter: 0.12, seed: 7 });
@@ -697,7 +705,7 @@
   function drawBat(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.42;
-    const hover = 16 + Math.sin(a.cycle * 0.8) * 2.4;
+    const hover = groundAt(monster.pos.x, monster.pos.y) + 16 + Math.sin(a.cycle * 0.8) * 2.4;
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const torso = node(root, v3(0, 0, a.lunge * 1.2), v3(a.lunge * -0.2, 0, 0));
@@ -718,7 +726,7 @@
   function drawGolem(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.62;
-    const root = node(mat4.compose(v3(monster.pos.x, 0.4 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: '#9aa0ae' };
     const torso = node(root, v3(0, 10.0, 0), v3(a.lunge * -0.14, 0, 0));
     part(P, torso, v3(7.4, 8.4, 5.4), { front: c.primary, back: c.dark, side: c.secondary, top: Colour.shade(c.primary, 0.12) }, body);
@@ -752,7 +760,7 @@
   function drawTreant(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.9;
-    const root = node(mat4.compose(v3(monster.pos.x, 0.4 + a.bob * 0.25, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
+    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.25, v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const trunk = node(root, v3(0, 9.0, 0), v3(a.lunge * -0.16, 0, 0));
     part(P, trunk, v3(5.0, 12.0, 4.6), { front: '#6b4c2c', back: '#54391f', side: '#5f4224' }, body);
@@ -786,7 +794,7 @@
   function drawWraith(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.62;
-    const hover = 8 + Math.sin(a.cycle * 0.6) * 2.6 + (monster.def && monster.def.aura ? 2 : 0);
+    const hover = groundAt(monster.pos.x, monster.pos.y) + 8 + Math.sin(a.cycle * 0.6) * 2.6 + (monster.def && monster.def.aura ? 2 : 0);
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha * 0.94, tint: opts.tint };
     const torso = node(root, v3(0, 9.0, 0), v3(a.lunge * -0.2, 0, 0));
@@ -821,7 +829,7 @@
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.9;
     const flying = a.moving || (monster.def && monster.def.flags && monster.def.flags.indexOf('flying') >= 0);
-    const lift = flying ? 12 + a.bob * 2 : 4;
+    const lift = groundAt(monster.pos.x, monster.pos.y) + (flying ? 12 + a.bob * 2 : 4);
     const root = node(mat4.compose(v3(monster.pos.x, lift, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     // tail + segmented spine, undulating
@@ -865,7 +873,7 @@
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.9;
     const squash = 1 + Math.sin((monster.walkPhase || 0) * 6 + 1) * 0.12 + a.lunge * 0.18;
-    const root = node(mat4.compose(v3(monster.pos.x, 0.2 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale * squash, scale)));
+    const root = node(mat4.compose(groundAt(monster.pos.x, monster.pos.y) + 0.2 + a.bob * 0.3, v3(0, facingYaw(monster), 0), v3(scale, scale * squash, scale)));
     const body = { alpha: opts.alpha * 0.92, tint: opts.tint };
     S.blob(P, {
       matrix: null, pos: mat4.transformPoint(root, v3(0, 4.2, 0)),
@@ -885,7 +893,7 @@
   function drawElemental(P, monster, a, opts) {
     const c = pal(monster);
     const scale = (monster.scale || 1) * 1.55;
-    const hover = 12 + a.bob * 2.4;
+    const hover = groundAt(monster.pos.x, monster.pos.y) + 12 + a.bob * 2.4;
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     S.blob(P, { matrix: null, pos: mat4.transformPoint(root, v3(0, 5, 0)), radii: v3(4.0, 4.6, 4.0), slices: 7, rings: 4, color: c.primary, jitter: 0.2, seed: 4, glow: c.eye, glowAlpha: 0.3 });
@@ -907,6 +915,7 @@
    * 4. DISPATCH
    * ========================================================== */
   function drawActor(P, actor, opts) {
+    P.tag && P.tag('actors');
     const o = opts || {};
     const time = o.time || 0;
     if (actor.kind === 'monster' || actor.kind === 'duelist') {
@@ -957,21 +966,6 @@
         default: drawHumanoid(P, actor, a, tintOpts); break;
       }
 
-      // telegraphed ability: a filling ground disc + pulsing ring, so the
-      // player can read the area before the boss lands the hit
-      if (a.telegraph > 0 && !a.dead) {
-        const radius = a.telegraphRadius || (actor.radius || 18) * 4;
-        const grow = 0.35 + a.telegraph * 0.65;
-        P.ellipseGround(actor.pos.x, actor.pos.y, radius * grow, radius * grow * 0.62, '#c8342c', 0.10 + a.telegraph * 0.14, 0.6);
-        S.ring(P, {
-          x: actor.pos.x, z: actor.pos.y, radius: radius * grow, thickness: 3.4,
-          color: '#ff8a5c', alpha: 0.4 + a.telegraph * 0.35, segments: 30
-        });
-        S.ring(P, {
-          x: actor.pos.x, z: actor.pos.y, radius: radius * (0.25 + a.telegraph * 0.6), thickness: 2,
-          color: '#ffd0a0', alpha: 0.35, segments: 24
-        });
-      }
       // boss aura + telegraph marker
       const def = actor.def || {};
       if (def.aura) {
@@ -989,6 +983,7 @@
    * 5. OVERLAYS — health bars, name tags, lock-on
    * ========================================================== */
   function drawOverlays(P, state, opts) {
+    P.tag && P.tag('labels');
     const o = opts || {};
     const eye = P.cam.state ? P.cam.state.eye : P.cam.eye;
     // nearest enemies first so the closest plate always wins the space
@@ -1069,6 +1064,8 @@
   }
 
   root.MytharaActors3D = {
+    setGround: setGround,
+    groundAt: groundAt,
     drawActor: drawActor,
     drawHero: drawHero,
     drawOverlays: drawOverlays,

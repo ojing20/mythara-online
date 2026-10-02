@@ -22,34 +22,11 @@
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require('jsdom');
-const { createCanvas } = require('@napi-rs/canvas');
+const napiCanvas = require('@napi-rs/canvas');
+const { createCanvas } = napiCanvas;
 const { buildInlineHtml } = require('./inline');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/* jsdom canvases ↔ real Skia canvases.
- * The game draws one canvas into another (`ctx.drawImage(offscreen, …)`), which
- * a browser does happily but @napi-rs/canvas rejects when handed a jsdom
- * element. Translate the argument so the legacy 2D renderer can be exercised
- * headlessly too. */
-const elementCanvas = new WeakMap();
-let drawImagePatched = false;
-function patchDrawImage() {
-  if (drawImagePatched) return;
-  drawImagePatched = true;
-  const proto = Object.getPrototypeOf(createCanvas(2, 2).getContext('2d'));
-  const original = proto.drawImage;
-  proto.drawImage = function (source) {
-    const args = Array.prototype.slice.call(arguments);
-    const mapped = elementCanvas.get(source);
-    if (mapped) args[0] = mapped;
-    for (let i = 1; i < args.length; i++) {
-      const m2 = elementCanvas.get(args[i]);
-      if (m2) args[i] = m2;
-    }
-    return original.apply(this, args);
-  };
-}
 
 /**
  * @param {object} [o]
@@ -64,7 +41,6 @@ function patchDrawImage() {
  */
 async function createHarness(o) {
   const opts = Object.assign({ quality: 'high', width: 960, height: 540 }, o || {});
-  patchDrawImage();
   const canvasMap = new WeakMap();
   const rafQueue = [];
   const errors = [];
@@ -78,13 +54,32 @@ async function createHarness(o) {
       const canvas = createCanvas(Math.max(2, el.width), Math.max(2, el.height));
       entry = { w: el.width, h: el.height, canvas: canvas, ctx: canvas.getContext('2d') };
       canvasMap.set(el, entry);
-      elementCanvas.set(el, canvas);
     }
     return entry;
   }
 
   const url = 'http://localhost:8123/?quality=' + opts.quality + (opts.render2d ? '&render=2d' : '') +
     (opts.time === undefined ? '' : '&time=' + opts.time);
+
+  /**
+   * jsdom hands the game *elements* while our contexts are native Skia ones,
+   * so drawImage(element) (the 2D fallback renders a cached backdrop canvas)
+   * would throw. Translate element arguments to the real canvas first.
+   */
+  const ctxProto = Object.getPrototypeOf(createCanvas(2, 2).getContext('2d'));
+  if (!ctxProto.__mytharaPatched) {
+    const original = ctxProto.drawImage;
+    ctxProto.drawImage = function (image) {
+      let src = image;
+      if (image && typeof image === 'object' && image.nodeName === 'CANVAS' && canvasMap.has(image)) {
+        src = canvasMap.get(image).canvas;
+      }
+      const args = Array.prototype.slice.call(arguments);
+      args[0] = src;
+      return original.apply(this, args);
+    };
+    ctxProto.__mytharaPatched = true;
+  }
 
   const dom = new JSDOM(buildInlineHtml(), {
     url: url,
@@ -185,54 +180,11 @@ async function createHarness(o) {
     return false;
   }
 
+  /** Dispatch a real keyboard event ("down" defaults to true, false = keyup). */
   function key(code, down) {
     const event = new win.KeyboardEvent(down === false ? 'keyup' : 'keydown', { code: code, key: code, bubbles: true });
     doc.dispatchEvent(event);
     return event;
-  }
-
-  /**
-   * Walk the hero toward a point using the real keyboard input path.
-   * Returns the distance left when it stopped (<= the requested range on arrival).
-   */
-  function approach(target, o2) {
-    const o = o2 || {};
-    const frames = o.frames || 140;
-    const range = o.range || 44;
-    const keys = [];
-    const press = (code) => { if (keys.indexOf(code) === -1) { keys.push(code); key(code); } };
-    for (let i = 0; i < frames; i++) {
-      const p = Game.state.player;
-      if (!p) break;
-      const tx = target.pos ? target.pos.x : target.x;
-      const ty = target.pos ? target.pos.y : target.y;
-      const dx = tx - p.pos.x, dy = ty - p.pos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist <= range) break;
-      const want = [];
-      if (Math.abs(dx) > 10) want.push(dx > 0 ? 'KeyD' : 'KeyA');
-      if (Math.abs(dy) > 10) want.push(dy > 0 ? 'KeyS' : 'KeyW');
-      want.forEach(press);
-      step(16.7);
-      try { Render3D.tickHud(0.0167, Game.state); } catch (e) { errors.push('hud: ' + e.stack); }
-    }
-    keys.forEach((code) => key(code, false));
-    const p2 = Game.state.player;
-    if (!p2) return Infinity;
-    const tx2 = target.pos ? target.pos.x : target.x;
-    const ty2 = target.pos ? target.pos.y : target.y;
-    return Math.sqrt((tx2 - p2.pos.x) * (tx2 - p2.pos.x) + (ty2 - p2.pos.y) * (ty2 - p2.pos.y));
-  }
-
-  /** Nearest living monster (the usual combat target). */
-  function nearestMonster() {
-    const p = Game.state.player;
-    const alive = (Game.state.monsters || []).filter(function (m) { return m.alive; });
-    if (!p || !alive.length) return null;
-    return alive.slice().sort(function (a, b) {
-      return ((a.pos.x - p.pos.x) * (a.pos.x - p.pos.x) + (a.pos.y - p.pos.y) * (a.pos.y - p.pos.y)) -
-        ((b.pos.x - p.pos.x) * (b.pos.x - p.pos.x) + (b.pos.y - p.pos.y) * (b.pos.y - p.pos.y));
-    })[0];
   }
 
   /** Queue a player attack through the real keyboard input path. */
@@ -245,6 +197,42 @@ async function createHarness(o) {
   function move(dir, held) {
     const codes = { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD' };
     return key(codes[dir] || dir, held);
+  }
+
+  /** Closest living monster to the hero (used by the gameplay smoke test). */
+  function nearestMonster() {
+    const player = Game.state.player;
+    if (!player) return null;
+    let best = null, bestD = Infinity;
+    (Game.state.monsters || []).forEach((m) => {
+      if (!m.alive) return;
+      const d = Math.hypot(m.pos.x - player.pos.x, m.pos.y - player.pos.y);
+      if (d < bestD) { bestD = d; best = m; }
+    });
+    return best;
+  }
+
+  /** Hold the real movement keys until the hero is within `range` of a target. */
+  function approach(target, o2) {
+    const opts = o2 || {};
+    const maxFrames = opts.frames === undefined ? 180 : opts.frames;
+    const range = opts.range === undefined ? 40 : opts.range;
+    const player = Game.state.player;
+    if (!player || !target) return Infinity;
+    let dist = Math.hypot(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
+    for (let i = 0; i < maxFrames && dist > range; i++) {
+      const dx = target.pos.x - player.pos.x;
+      const dz = target.pos.y - player.pos.y;
+      key('KeyD', dx > 0 ? true : false);
+      key('KeyA', dx < 0 ? true : false);
+      key('KeyS', dz > 0 ? true : false);
+      key('KeyW', dz < 0 ? true : false);
+      pump(1);
+      dist = Math.hypot(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
+      if (!player.alive) break;
+    }
+    ['KeyW', 'KeyA', 'KeyS', 'KeyD'].forEach((code) => key(code, false));
+    return dist;
   }
 
   async function signIn(o2) {
@@ -329,44 +317,6 @@ async function createHarness(o) {
   function setTime(t) { Render3D.setTimeOfDay(t); }
   function setQuality(q) { Render3D.setQuality(q); }
 
-  /**
-   * Coarse pixel signature of the game canvas (12x7 luminance grid).
-   * Two frames of the same pose match; different poses/screens differ — used
-   * to prove animation states actually render differently.
-   */
-  function signature() {
-    const canvas = doc.getElementById('game-canvas');
-    if (!canvas) return null;
-    const entry = canvasFor(canvas);
-    const { width: w, height: h } = entry.canvas;
-    const data = entry.ctx.getImageData(0, 0, w, h).data;
-    const cols = 12, rows = 7, out = [];
-    for (let gy = 0; gy < rows; gy++) {
-      for (let gx = 0; gx < cols; gx++) {
-        let sum = 0, n = 0;
-        const x0 = Math.floor((gx / cols) * w), x1 = Math.floor(((gx + 1) / cols) * w);
-        const y0 = Math.floor((gy / rows) * h), y1 = Math.floor(((gy + 1) / rows) * h);
-        for (let y = y0; y < y1; y += 3) {
-          for (let x = x0; x < x1; x += 3) {
-            const i = (y * w + x) * 4;
-            sum += (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-            n++;
-          }
-        }
-        out.push(n ? sum / n : 0);
-      }
-    }
-    return out;
-  }
-
-  /** Mean absolute difference between two signatures (0 = identical). */
-  function signatureDelta(a, b) {
-    if (!a || !b || a.length !== b.length) return Infinity;
-    let total = 0;
-    for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
-    return total / a.length;
-  }
-
   function shot(target) {
     const file = path.resolve(target);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -416,8 +366,8 @@ async function createHarness(o) {
     App, Game, Account, Render3D, Enemies,
     wait, pump, step, resize, sizeCanvas, dismissModal, key, attack, move,
     signIn, createHero, unlockThrough, enterScene, setTime, setQuality,
-    approach, nearestMonster,
-    shot, shotElement, stats, profile, resetProfile, summary, signature, signatureDelta,
+    nearestMonster, approach,
+    shot, shotElement, stats, profile, resetProfile, summary,
     close() { try { dom.window.close(); } catch (e) { /* jsdom already gone */ } }
   };
 }

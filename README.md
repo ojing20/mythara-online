@@ -239,10 +239,23 @@ files. The original 2D renderer stays in the build untouched and can be selected
 | Combat | Weapon swings, impact bursts, spell particles (fire/ice/lightning/holy), floating damage and crit numbers, screen shake, ground decals, projectiles |
 | UI | Loading screen with animated logo, percentage and rotating tips; gold-ringed portrait, level/class, ornate HP/MP/XP bars, equipment slots, skill hotbar, quest tracker, minimap, chat frame, wallet (coins/gems/potions) and a boss HP bar |
 
-Quality presets (`?quality=low|medium|high`, default `auto`) scale view distance, render scale and
-detail. On `auto` the renderer starts lower on phone-like devices (coarse pointer, high DPR or a
-small viewport) and then follows the measured frame time, so phones stay smooth instead of janking
-at `high` first. `?time=0..1` pins the time of day.
+Quality presets (`?quality=low|medium|high`, default `auto`) scale view distance and detail for
+phones. `?time=0..1` pins the time of day.
+
+### Living world (v0.5.1-field)
+
+| System | Detail |
+| --- | --- |
+| Height-field terrain | Fixed-seed noise per region gives rolling hills and shallow valleys everywhere, with the mountain rim and carved river/lake beds outside the field. Nothing is flat: actors, shadows, name plates, projectiles, spell impacts, decals and the camera all sample the same height field, so nothing floats or sinks |
+| Ground shading | Grass/dirt/rock/cliff/snow blended by height and slope, plus wet sand/gravel ringing every shoreline and a smooth dirt road across the field |
+| Village (Silverstone Beginning) | Central plaza with fountain and banner poles, houses, a well, market stalls, a blacksmith forge with anvil and weapon rack, lanterns, a safe-zone ground ring and three NPCs (quest giver **!**, trader **$**, healer **+**) with floating name tags |
+| Road furniture | Split-rail fences, signposts and lanterns follow the road; scenery is kept out of the road corridor and the village plaza |
+| Ambient life | Fireflies and lantern/village glow after dark, drifting leaves and dust motes by day, footstep dust on dry ground and splashes when walking through water |
+| Performance | Density LOD thins distant scenery deterministically, closed shapes back-face cull, small furniture is near-only, and the Low/Medium/High presets scale prop distance, detail distance, render scale and weather density |
+
+Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈22 ms median** in the hub
+village and **≈23 ms median** in a chapter-1 battle (p90 ≈ 47 ms). A real browser with a
+GPU-backed canvas is several times faster.
 
 ### Development tools (`tools/`)
 
@@ -364,17 +377,9 @@ The server suite ships in the repository and runs with no dependencies:
 node --test                   # 13 server checks (register, login, conflicts, restart)
 ```
 
-```bash
-npm --prefix tools install
-node tools/gameflow-check.js                       # 15 functional checks (systems still work)
-node tools/render-suite.js tools/shots/suite --what=anim    # 7 hero animation states, must differ
-node tools/render-suite.js tools/shots/suite --what=camera  # 13 camera-control checks
-node tools/render-check.js tools/shots --scene=battle --frames=40 --combat
-node tools/render-perf.js                          # per-section frame cost
-```
-
-The render harnesses boot the real game headlessly and write PNG frames for review; `render-suite`
-also asserts the hero animation states and camera controls rather than only producing images.
+Presentation work is verified with the `tools/` render harnesses, which boot the real game
+headlessly and write PNG frames (`render-check.js` for one scene, `render-suite.js` for the 10
+chapters / 10 bosses / 10 hero previews, `render-perf.js` for frame cost).
 
 
 | Suite | Checks | Covers |

@@ -281,8 +281,11 @@
     }
     quads.sort(function (a, b) { return P.cam.distanceTo(b.centre) - P.cam.distanceTo(a.centre); });
     const draw = function () {
+      const eye = P.cam.state.eye;
       for (let i = 0; i < quads.length; i++) {
         const q = quads[i];
+        // back-face cull: a closed shell only needs its camera-facing half
+        if (q.normal.x * (eye.x - q.centre.x) + q.normal.y * (eye.y - q.centre.y) + q.normal.z * (eye.z - q.centre.z) <= 0) continue;
         P.poly3(q.pts, q.normal, {
           color: colour, alpha: opts.alpha, glow: opts.glow, glowAlpha: opts.glowAlpha,
           tint: opts.tint, lit: opts.lit, flat: opts.flat

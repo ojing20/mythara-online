@@ -66,15 +66,15 @@
       id: 'chapter3', name: 'Dark Caverns',
       skyTop: '#12161f', skyBottom: '#3a4250', accent: '#8fe3ff', fog: '#2a3242', fogDensity: 0.0034,
       ground: { base: '#4a4f5c', alt: '#3b404b', rock: '#5c6270', path: '#63676f', cliff: '#2f343d' },
-      weather: 'drip', cycle: false, sunStart: 0.5, ceiling: true, mottle: 0.34,
+      weather: 'drip', cycle: false, sunStart: 0.5, ceiling: true,
       props: { trees: 'none', treeCount: 0, rocks: 70, stalagmites: 44, crystals: 26, water: 'lake', village: 0, castle: null, ruins: 8, torches: 12, fences: 0, glowingMoss: true }
     },
     chapter4: {
       grade: { colour: '#cfeaff', alpha: 0.1, blend: 'overlay' },
       id: 'chapter4', name: 'Frozen Valley',
       skyTop: '#4a7fa8', skyBottom: '#dff2ff', accent: '#7fdcff', fog: '#cfe6f5', fogDensity: 0.0022,
-      ground: { base: '#cfe0ee', alt: '#a9c4d8', rock: '#87949f', path: '#b9c9d6', cliff: '#6f8494' },
-      weather: 'snow', cycle: true, sunStart: 0.4, mottle: 0.3,
+      ground: { base: '#dbeaf5', alt: '#c2d8e8', rock: '#9fb0bd', path: '#b9c9d6', cliff: '#8fa6b6' },
+      weather: 'snow', cycle: true, sunStart: 0.4,
       props: { trees: 'conifer', treeCount: 90, rocks: 34, bushes: 12, ice: 30, water: 'frozen', village: 3, castle: 'tower', ruins: 6, torches: 6, fences: 4 }
     },
     chapter5: {
@@ -90,7 +90,7 @@
       id: 'chapter6', name: 'Haunted Swamp',
       skyTop: '#2f4a3a', skyBottom: '#7a9a6a', accent: '#9be36a', fog: '#5d7358', fogDensity: 0.0038,
       ground: { base: '#4f6b3a', alt: '#3e5730', rock: '#5a6350', path: '#5f5432', cliff: '#33452a' },
-      weather: 'fog', cycle: true, sunStart: 0.3, mottle: 0.3,
+      weather: 'fog', cycle: true, sunStart: 0.3,
       props: { trees: 'dead', treeCount: 86, rocks: 24, bushes: 30, reeds: 44, water: 'swamp', gravestones: 24, village: 0, castle: null, ruins: 14, torches: 6, wisps: 14 }
     },
     chapter7: {
@@ -113,7 +113,7 @@
       grade: { colour: '#a45cff', alpha: 0.13, blend: 'overlay' },
       id: 'chapter9', name: 'Shadow Realm',
       skyTop: '#1a1530', skyBottom: '#5c4a8a', accent: '#c46bff', fog: '#241c40', fogDensity: 0.0032,
-      weather: 'void', cycle: false, sunStart: 0.5, mottle: 0.3,
+      weather: 'void', cycle: false, sunStart: 0.5,
       ground: { base: '#2f2850', alt: '#251f42', rock: '#3a3358', path: '#403862', cliff: '#1b1633' },
       props: { trees: 'void', treeCount: 34, rocks: 40, crystals: 34, floating: 18, ruins: 20, torches: 6, wisps: 20, castle: null, village: 0, pillars: 16 }
     },
@@ -172,13 +172,23 @@
     const seed = 1337 + theme_.id.length * 977;
     const t = theme_;
     const terraced = t.props && t.props.dunes;
+    // Rolling ground everywhere — gentle hills and shallow valleys. The seed is
+    // derived from the region id, so the map is identical on every device/boot.
+    const amp = t.props && t.props.arena ? 0 : (t.id === 'chapter3' ? 2.6 : 5.6);
+    const rolling = function (x, z) {
+      return (Noise.fbm(x / 380, z / 380, seed + 401, 3) - 0.5) * 2 * amp
+        + (Noise.fbm(x / 150, z / 150, seed + 733, 2) - 0.5) * 2 * amp * 0.3
+        + (Noise.value(x / 62, z / 62, seed + 97) - 0.5) * 2 * amp * 0.12;
+    };
     return function heightAt(x, z) {
-      if (inPlayArea(x, z, 46)) return 0;
+      const inside = inPlayArea(x, z, 46);
+      let h = rolling(x, z);
+      if (inside) return h;                       // the battlefield rolls, it is not a plate
       const nx = (x - 480) / 260;
       const nz = (z - 400) / 260;
       const dist = Math.sqrt(nx * nx + nz * nz);
       const rise = M.smoothstep(clamp((dist - 0.95) / 2.2, 0, 1));
-      let h = rise * (16 + Noise.fbm(x / 420, z / 420, seed, 4) * 52);
+      h += rise * (16 + Noise.fbm(x / 420, z / 420, seed, 4) * 52);
       h += Noise.fbm(x / 150, z / 150, seed + 91, 3) * 4.2 * rise;
       const rim = clamp((Math.max(0, dist - 2.0) / 2.2), 0, 1);
       h += rim * rim * 190 * (0.5 + Noise.fbm(x / 620, z / 620, seed + 7, 3));
@@ -204,6 +214,14 @@
     return 452 + Math.sin((x - 200) / 260) * 46 + Math.sin(x / 90) * 6;
   }
 
+  /** Distance from a point to the road centreline (used to keep props off it). */
+  function roadDistance(x, z) {
+    return Math.abs(z - roadCentre(x));
+  }
+
+  /** Village plaza centre (Silverstone Beginning) — kept clear of scenery. */
+  const VILLAGE = { x: 480, z: 214, r: 190 };
+
   /** Terrain material by position, height and theme. */
   function makeMaterials(theme_) {
     const g = theme_.ground;
@@ -213,18 +231,19 @@
     return function materialAt(x, z, h) {
       const alt = Noise.fbm(x / 210, z / 210, 77, 3);
       const mottle = Noise.value(x / 58, z / 58, 91);
-      const patch = Noise.fbm(x / 150, z / 150, 133, 2);
       const base = Colour.mix(g.base, g.alt, clamp(alt * 0.9 - 0.1, 0, 1));
-      // strong-but-soft material patches so big flats (caverns, void, snow,
-      // swamp) still read as ground instead of empty colour
-      let colour = Colour.mix(base, g.base, mottle * (theme_.mottle || 0.18));
-      colour = Colour.mix(colour, g.alt, clamp((patch - 0.42) * 2.1, 0, 1) * 0.3);
-      colour = Colour.mix(colour, g.rock, clamp((0.34 - patch) * 2.4, 0, 1) * 0.22);
+      let colour = Colour.mix(base, g.base, mottle * 0.18);
       // Continuous ramps (grass → rock → cliff → snow). Hard height steps used to
       // paint flat white wedges wherever a hill crossed a threshold.
       if (h > 15) colour = Colour.mix(colour, g.rock, clamp((h - 15) / 30, 0, 1));
       if (h > 40) colour = Colour.mix(colour, g.cliff, clamp((h - 40) / 38, 0, 1));
       if (snowcaps && h > snowLine) colour = Colour.mix(colour, '#eef4fb', clamp((h - snowLine) / 80, 0, 0.8));
+      // wet sand / gravel ringing every shoreline
+      const w = waterDepth(x, z, theme_);
+      if (w > 0.02) {
+        const sand = g.sand || g.path || '#cbb083';
+        colour = Colour.mix(colour, sand, clamp(1 - w * 1.6, 0, 1) * 0.8);
+      }
       return colour;
     };
   }
@@ -282,6 +301,9 @@
         z = clamp(z, WORLD_EXT.minZ + 20, WORLD_EXT.maxZ - 20);
         if (cfg.avoidPlay && inPlayArea(x, z, cfg.avoidPlay)) continue;
         if (cfg.onlyOutside && inPlayArea(x, z, cfg.onlyOutside)) continue;
+        // never drop scenery on the road, in the village plaza or in the arena ring
+        if (!cfg.onRoad && roadDistance(x, z) < (cfg.roadGap || 36)) continue;
+        if (cfg.plazaGap !== 0 && Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < (cfg.plazaGap || VILLAGE.r)) continue;
         if (waterDepth(x, z, theme_) > 0.25 && !cfg.onWater) continue;
         const h = heightAt(x, z);
         if (cfg.maxHeight !== undefined && h > cfg.maxHeight) continue;
@@ -297,15 +319,50 @@
       }
     }
 
+    /**
+     * Field scatter: scenery *inside* the walkable field, so the battlefield is
+     * a living landscape instead of an empty plate. Kept off the road corridor,
+     * out of the village plaza and out of the central duelling circle.
+     */
+    function placeField(type, count, cfg) {
+      const conf = cfg || {};
+      for (let i = 0; i < count * 3 && placedField < count; i++) {
+        const x = PLAY.minX + 12 + rand(i * 3 + 7, 81) * (PLAY.maxX - PLAY.minX - 24);
+        const z = PLAY.minZ + 8 + rand(i * 5 + 11, 83) * (PLAY.maxZ - PLAY.minZ - 16);
+        if (roadDistance(x, z) < (conf.roadGap || 42)) continue;
+        if (Math.hypot(x - VILLAGE.x, z - VILLAGE.z) < VILLAGE.r) continue;
+        if (Math.hypot(x - 480, z - 402) < (conf.centre || 150)) continue;
+        if (conf.edge) {
+          const edge = Math.min(x - PLAY.minX, PLAY.maxX - x, z - PLAY.minZ, PLAY.maxZ - z);
+          if (edge > (conf.edgeDepth || 70)) continue;
+        }
+        const h = heightAt(x, z);
+        list.push({
+          type: type, x: x, z: z, y: h,
+          s: (conf.scaleMin || 0.8) + rand(i + 91, 3) * ((conf.scaleMax || 1.25) - (conf.scaleMin || 0.8)),
+          rot: rand(i + 17, 9) * TAU,
+          v: rand(i + 33, 11),
+          i: i
+        });
+        placedField++;
+      }
+    }
+    let placedField = 0;
+
     if (props.trees && props.trees !== 'none' && props.treeCount) {
       place('tree:' + props.trees, props.treeCount, { band: [200, 950], avoidPlay: 54 });
+      // a handful of trees framing the field's rim
+      placeField('tree:' + props.trees, Math.max(4, Math.round(props.treeCount * 0.12)), { edge: true, roadGap: 46, scaleMin: 0.9, scaleMax: 1.25 });
     }
     if (props.trees === 'none' && props.rocks) {
       // no trees: fill the outer ring with rock instead so the horizon is not empty
       place('rockBig', Math.round(props.rocks * 0.7), { band: [240, 960], avoidPlay: 50 });
     }
     if (props.rocks) place('rock', props.rocks, { band: [120, 900], avoidPlay: 26 });
+    if (props.rocks) placeField('rock', Math.max(5, Math.round(props.rocks * 0.45)), { roadGap: 44, centre: 130, scaleMin: 0.7, scaleMax: 1.35 });
     if (props.bushes) place('bush', props.bushes, { band: [110, 620], avoidPlay: 34 });
+    if (props.bushes) placeField('bush', Math.max(6, Math.round(props.bushes * 0.5)), { roadGap: 40, centre: 140, scaleMin: 0.8, scaleMax: 1.3 });
+    placeField('rockBig', 6, { roadGap: 48, centre: 130, scaleMin: 0.6, scaleMax: 1.05 });
     if (props.stalagmites) place('stalagmite', props.stalagmites, { band: [110, 820], avoidPlay: 30 });
     if (props.crystals) place('crystal', props.crystals, { band: [130, 800], avoidPlay: 44 });
     if (props.ice) place('iceShard', props.ice, { band: [130, 760], avoidPlay: 40 });
@@ -345,14 +402,43 @@
         list.push({ type: 'brazier', x: x, z: z, y: heightAt(x, z), s: 1, rot: a, v: 0.2 + i * 0.11, i: i });
       }
     }
+    /**
+     * Village — houses ring the plaza, with a well, market stalls, a blacksmith,
+     * fences, lanterns, a safe-zone ring and NPCs (quest giver, shop, healer).
+     * All decorative: the walkable field and the combat rules are unchanged.
+     */
     if (props.village) {
+      const V = VILLAGE;
       for (let i = 0; i < props.village; i++) {
         const a = -1.15 + (i / Math.max(1, props.village)) * 1.5;
         const x = 480 + Math.cos(a) * (300 + rand(i, 21) * 90);
         const z = 400 - (250 + rand(i, 22) * 110);
         list.push({ type: 'house', x: x, z: z, y: heightAt(x, z), s: 0.9 + rand(i, 23) * 0.5, rot: rand(i, 24) * TAU, v: rand(i, 25), i: i, lamp: true });
       }
-      list.push({ type: 'well', x: 480, z: 210, y: heightAt(480, 210), s: 1, rot: 0, v: 0.5, i: 0 });
+      // plaza furniture
+      const vy = heightAt(V.x, V.z);
+      list.push({ type: 'plaza', x: V.x, z: V.z, y: vy, s: 1, rot: 0, v: 0.5, i: 1 });
+      list.push({ type: 'safeZone', x: V.x, z: V.z, y: vy, r: 74, s: 1, rot: 0, v: 0.5, i: 2 });
+      list.push({ type: 'well', x: V.x - 30, z: V.z - 6, y: heightAt(V.x - 30, V.z - 6), s: 1, rot: 0, v: 0.5, i: 0 });
+      list.push({ type: 'blacksmith', x: V.x + 46, z: V.z + 26, y: heightAt(V.x + 46, V.z + 26), s: 1, rot: -0.5, v: 0.6, i: 3 });
+      [[-26, 30, 0.2], [22, 34, 2.2], [-4, 44, 1.2]].forEach(function (c, i) {
+        const x = V.x + c[0], z = V.z + c[1];
+        list.push({ type: 'market', x: x, z: z, y: heightAt(x, z), s: 1, rot: c[2], v: i === 1 ? 0.8 : 0.3, i: i + 4 });
+      });
+      // NPCs: quest giver, shop keeper, healer — own spots, never on the plaza itself
+      [
+        { x: V.x - 16, z: V.z + 16, name: 'Warden Ilsa', mark: '!', v: 0.2 },
+        { x: V.x + 14, z: V.z - 18, name: 'Trader Bex', mark: '$', v: 0.5 },
+        { x: V.x - 22, z: V.z - 20, name: 'Healer Sora', mark: '+', v: 0.85 }
+      ].forEach(function (n, i) {
+        list.push({ type: 'npc', x: n.x, z: n.z, y: heightAt(n.x, n.z), s: 1, rot: 0, v: n.v, i: i + 1, name: n.name, mark: n.mark });
+      });
+      // lanterns + fences around the plaza rim
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.5;
+        const x = V.x + Math.cos(a) * 88, z = V.z + Math.sin(a) * 74;
+        list.push({ type: 'lantern', x: x, z: z, y: heightAt(x, z), s: 1, rot: 0, v: rand(i, 71), i: i + 11 });
+      }
     }
     if (props.castle === 'tower' || props.castle === 'watchtower') {
       list.push({ type: props.castle, x: 1160, z: -300, y: heightAt(1160, -300), s: 1.15, rot: -0.3, v: 0.5, i: 0 });
@@ -385,6 +471,22 @@
         const x = 60 + rand(i, 61) * 840;
         const z = 470 + rand(i, 62) * 260;
         list.push({ type: 'fence', x: x, z: z, y: heightAt(x, z), s: 1, rot: rand(i, 63) * 0.6, v: rand(i, 64), i: i });
+      }
+    }
+    // Road furniture: split-rail fence runs, signposts and lanterns either side
+    // of the dirt road, all lifted onto the terrain.
+    for (let x = 90; x <= 900; x += 74) {
+      const c = roadCentre(x);
+      const side = (Math.floor(x / 74) % 2) ? 1 : -1;
+      const fx = x, fz = c + side * 30;
+      list.push({ type: 'fence', x: fx, z: fz, y: heightAt(fx, fz), s: 1, rot: 0.06 * side, v: rand(x, 64), i: Math.round(x) });
+      if (x % 148 < 40) {
+        const lx = x, lz = c - side * 26;
+        list.push({ type: 'lantern', x: lx, z: lz, y: heightAt(lx, lz), s: 1, rot: 0, v: rand(x, 72), i: Math.round(x) });
+      }
+      if (x % 222 < 40) {
+        const sx = x, sz = c - side * 33;
+        list.push({ type: 'signpost', x: sx, z: sz, y: heightAt(sx, sz), s: 1, rot: side > 0 ? -1.4 : 1.4, v: rand(x, 73), i: Math.round(x) });
       }
     }
 
@@ -449,27 +551,32 @@
       const t2 = i / 3;
       S.cone(P, {
         pos: v3(p.x, p.y + h * (0.34 + t2 * 0.42), p.z),
-        radius: (6.2 - t2 * 2.2) * p.s, height: (12 - t2 * 2.4) * p.s, sides: 8,
+        radius: (6.2 - t2 * 2.2) * p.s, height: (12 - t2 * 2.4) * p.s, sides: 6,
         color: i === 0 ? PALETTE.pineDark : PALETTE.pine, yaw: p.rot + i
       });
     }
     if (p.v > 0.55) {
-      S.cone(P, { pos: v3(p.x, p.y + h * 0.95, p.z), radius: 3.6 * p.s, height: 3.4 * p.s, sides: 8, color: '#f4faff' });
+      S.cone(P, { pos: v3(p.x, p.y + h * 0.95, p.z), radius: 3.6 * p.s, height: 3.4 * p.s, sides: 6, color: '#f4faff' });
     }
     void t;
   }
 
   function treeBroadleaf(P, p, t) {
-    const h = 34 * p.s;
+    const h = 30 * p.s;
     const sway = Math.sin(t * 0.7 + p.v * 8) * 0.35;
-    S.cylinder(P, { pos: v3(p.x + sway * 0.4, p.y + h * 0.28, p.z), radius: 1.5 * p.s, radiusTop: 1.0 * p.s, height: h * 0.6, sides: 6, color: PALETTE.trunk });
+    S.cylinder(P, { pos: v3(p.x + sway * 0.4, p.y + h * 0.22, p.z), radius: 1.6 * p.s, radiusTop: 1.0 * p.s, height: h * 0.46, sides: 6, color: PALETTE.trunk });
+    // two big canopy lobes + a rim lobe so the silhouette is a crown, not a lollipop
     S.blob(P, {
-      pos: v3(p.x + sway, p.y + h * 0.86, p.z), radii: v3(8.2 * p.s, 6.4 * p.s, 7.6 * p.s),
-      slices: 6, rings: 3, color: Colour.mix(PALETTE.leaf, PALETTE.leafLight, p.v * 0.5), jitter: 0.22, seed: p.i + 3
+      pos: v3(p.x + sway, p.y + h * 0.78, p.z), radii: v3(11.4 * p.s, 8.6 * p.s, 10.6 * p.s),
+      slices: 6, rings: 2, color: Colour.mix(PALETTE.leaf, PALETTE.leafLight, p.v * 0.5), jitter: 0.22, seed: p.i + 3
     });
     S.blob(P, {
-      pos: v3(p.x - 3.4 * p.s + sway, p.y + h * 0.74, p.z + 1.4 * p.s), radii: v3(5.2 * p.s, 4.2 * p.s, 5.0 * p.s),
+      pos: v3(p.x - 4.6 * p.s + sway, p.y + h * 0.66, p.z + 1.8 * p.s), radii: v3(7.0 * p.s, 5.6 * p.s, 6.6 * p.s),
       slices: 5, rings: 2, color: PALETTE.leafDark, jitter: 0.25, seed: p.i + 9
+    });
+    S.blob(P, {
+      pos: v3(p.x + 4.2 * p.s + sway, p.y + h * 0.9, p.z - 2.2 * p.s), radii: v3(6.2 * p.s, 4.6 * p.s, 5.6 * p.s),
+      slices: 4, rings: 2, color: Colour.mix(PALETTE.leaf, PALETTE.leafLight, 0.65), jitter: 0.24, seed: p.i + 17
     });
   }
 
@@ -805,6 +912,67 @@
     const terrain = { buckets: [] };
     for (let b = 0; b < 40; b++) terrain.buckets.push([]);
     const weather3d = { particles: [], splashes: [], flash: 0, wind: 0.4, lastKind: null };
+    /** Ambient life: fireflies after dark, drifting leaves / dust motes by day. */
+    const ambient = { built: false, fireflies: [], motes: [] };
+    function ensureAmbient() {
+      if (ambient.built) return;
+      ambient.built = true;
+      for (let i = 0; i < 34; i++) {
+        ambient.fireflies.push({
+          x: 480 + (Math.random() - 0.5) * 900, z: 400 + (Math.random() - 0.5) * 700,
+          y: 4 + Math.random() * 16, ph: Math.random() * TAU, sp: 0.5 + Math.random()
+        });
+      }
+      for (let i = 0; i < 40; i++) {
+        ambient.motes.push({
+          x: 480 + (Math.random() - 0.5) * 950, z: 400 + (Math.random() - 0.5) * 760,
+          y: 6 + Math.random() * 30, ph: Math.random() * TAU, sp: 0.4 + Math.random() * 0.8,
+          s: 0.6 + Math.random() * 0.9
+        });
+      }
+    }
+
+    function updateAmbient(dt, time) {
+      ensureAmbient();
+      const night = !!(P_lightRef && P_lightRef.night);
+      const list = night ? ambient.fireflies : ambient.motes;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        p.ph += dt * (night ? 1.6 : 0.5) * p.sp;
+        if (night) {
+          p.x += Math.sin(p.ph * 0.7) * 5 * dt;
+          p.z += Math.cos(p.ph * 0.9) * 5 * dt;
+          p.y += Math.sin(p.ph * 1.3) * 3 * dt;
+        } else {
+          p.x += (8 + weather3d.wind * 14) * dt * p.sp;         // blown along the wind
+          p.y += Math.sin(p.ph) * 2.4 * dt;
+          if (p.x > 960) p.x = -60;
+        }
+      }
+      void time;
+    }
+
+    /** Light reference for ambient systems (set at the start of each frame). */
+    let P_lightRef = null;
+
+    function drawAmbient(P) {
+      ensureAmbient();
+      const night = !!(P.light && P.light.night);
+      const list = night ? ambient.fireflies : ambient.motes;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        const groundY = heightAt(p.x, p.z);
+        const y = groundY + (night ? p.y : p.y + 14);
+        const flick = 0.55 + 0.45 * Math.sin(p.ph * 2.2);
+        if (night) {
+          S.billboard(P, { pos: v3(p.x, y, p.z), width: 3.2, height: 3.2, color: '#ffe98a', alpha: 0.5 * flick + 0.15, soft: true, blend: 'lighter' });
+          S.billboard(P, { pos: v3(p.x, y, p.z), width: 8, height: 8, color: '#c9ff7a', alpha: 0.12 * flick, soft: true, blend: 'lighter' });
+        } else {
+          const colour = theme_.props && (theme_.props.water === 'swamp' || theme_.id === 'chapter2') ? '#9fd06a' : '#d9c98a';
+          S.billboard(P, { pos: v3(p.x, y, p.z), width: 1.8 * p.s, height: 1.8 * p.s, color: colour, alpha: 0.42, soft: true });
+        }
+      }
+    }
 
     // precompute the static terrain quads (positions + colour), grouped for culling
     const quads = [];
@@ -859,6 +1027,7 @@
     }
 
     function drawMesh(P, time, cam, mesh, minDist, maxDist) {
+      P.tag && P.tag('terrain');
       const bucketSize = 40;
       const buckets = terrain.buckets;
       for (let i = 0; i < buckets.length; i++) buckets[i].length = 0;
@@ -931,7 +1100,7 @@
       const w = q.water;
       const dist = M.v3dist(P.cam.state.eye, v3(q.cx, q.ch, q.cz));
       const themeWater = theme_.id === 'chapter6' ? '#3f4a2a' : theme_.id === 'chapter8' ? '#ff6a2a'
-        : theme_.id === 'chapter4' ? '#7fc8e8' : theme_.id === 'chapter3' ? '#1d2a3a' : '#2f5f8a';
+        : theme_.id === 'chapter4' ? '#cfeaf7' : theme_.id === 'chapter3' ? '#1d2a3a' : '#2f5f8a';
       const shimmer = 0.5 + 0.5 * Math.sin(time * 1.7 + q.cx * 0.05 + q.cz * 0.07);
       const y = q.ch - 0.6 + Math.sin(time * 0.9 + q.cx * 0.02) * 0.18;
       const base = Colour.toRgb(Colour.mix(themeWater, theme_.skyBottom, 0.22 + shimmer * 0.18));
@@ -1241,13 +1410,48 @@
     }
 
     /* ---------- props ---------- */
-    function drawProps(P, time, cam) {
+    /**
+     * Small village/road furniture is only worth drawing up close: it is tiny
+     * on screen but expensive per instance. Kept in one list so the far field
+     * stays cheap no matter how much decoration the village has.
+     */
+    const NEAR_ONLY = {
+      fence: 1, lantern: 1, signpost: 1, market: 1, npc: 1, plaza: 1, well: 1, safeZone: 1,
+      bones: 1, gravestone: 1, stalagmite: 1, mushroom: 1, reed: 1, spike: 1, iceShard: 1, bush: 1
+    };
+
+    /**
+     * Density LOD: distant scenery is thinned with a stable per-prop hash, so
+     * the far field costs a fraction of the near field and nothing pops between
+     * frames (the same props are always the ones dropped).
+     */
+    const DENSITY_LOD = {
+      'tree:broadleaf': 1, 'tree:conifer': 1, 'tree:giant': 1, 'tree:dead': 1, 'tree:void': 1,
+      rock: 1, rockBig: 1, bush: 1, ruin: 1, gravestone: 1, stalagmite: 1, crystal: 1, iceShard: 1,
+      pillar: 1, spike: 1, reed: 1, mushroom: 1, bones: 1
+    };
+
+    function keepProp(p, dist, detailLevel) {
+      if (!DENSITY_LOD[p.type]) return true;
+      if (dist < 560) return true;
+      const keep = dist < 950 ? (detailLevel >= 3 ? 0.62 : detailLevel === 2 ? 0.45 : 0.3)
+        : (detailLevel >= 3 ? 0.34 : detailLevel === 2 ? 0.22 : 0.12);
+      return Noise.value(p.x * 0.37 + p.z * 0.11, p.z * 0.29, 1234) < keep;
+    }
+
+    function drawProps(P, time, cam, maxDist, nearDist, detailLevel) {
+      P.tag && P.tag('props');
       const eye = cam.state.eye;
+      const far = maxDist || 1700;
+      const near = nearDist || far;
+      const far2 = far * far, near2 = near * near;
+      const lod = detailLevel === undefined ? 3 : detailLevel;
       for (let i = 0; i < props.length; i++) {
         const p = props[i];
         const dx = p.x - eye.x, dz = p.z - eye.z;
         const d2 = dx * dx + dz * dz;
-        if (d2 > 1750 * 1750) continue;
+        if (d2 > (NEAR_ONLY[p.type] ? near2 : far2)) continue;
+        if (!keepProp(p, Math.sqrt(d2), lod)) continue;
         const s = cam.project(v3(p.x, p.y + 6, p.z), P.vp);
         if (!s.visible) continue;
         if (s.x < -300 || s.x > P.vp.width + 300 || s.y < -320 || s.y > P.vp.height + 320) continue;
@@ -1297,6 +1501,13 @@
         case 'brazier': brazier(P, p, time, theme__); break;
         case 'house': house(P, p, time, theme__); break;
         case 'well': well(P, p); break;
+        case 'market': marketStall(P, p, time); break;
+        case 'blacksmith': blacksmith(P, p, time); break;
+        case 'plaza': plaza(P, p); break;
+        case 'signpost': signpost(P, p, time); break;
+        case 'lantern': lantern(P, p, time); break;
+        case 'npc': npc(P, p, time); break;
+        case 'safeZone': safeZone(P, p, time); break;
         case 'fence': fence(P, p); break;
         case 'watchtower': watchtower(P, p); break;
         case 'fortress': fortress(P, p, theme__); break;
@@ -1307,6 +1518,129 @@
         case 'arenaRing': arenaRing(P, p); break;
         default: break;
       }
+    }
+
+    /* ---------- village furniture: original Mythara designs ---------- */
+
+    /** Market stall: canvas awning on four poles, crates and produce. */
+    function marketStall(P, p, time) {
+      const w = 11 * p.s, d = 8 * p.s, h = 7.6 * p.s;
+      const wood = '#7d5c37', awning = p.v > 0.5 ? '#b5432f' : '#2f6f8a';
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (c) {
+        S.cylinder(P, { pos: v3(p.x + c[0] * w * 0.42, p.y + h * 0.5, p.z + c[1] * d * 0.42), radius: 0.35 * p.s, height: h, sides: 4, color: wood });
+      });
+      S.box(P, { pos: v3(p.x, p.y + h * 0.98, p.z), size: v3(w * 1.06, 0.6, d * 1.12), colours: { all: awning }, rot: v3(0.06, p.rot, 0) });
+      S.box(P, { pos: v3(p.x, p.y + h * 0.62, p.z + d * 0.3), size: v3(w * 0.9, 2.6, 1.0), colours: { all: wood }, rot: v3(0, p.rot, 0) });
+      // produce: little spheres of fruit/veg on the counter
+      for (let i = 0; i < 3; i++) {
+        S.billboard(P, {
+          pos: v3(p.x - w * 0.28 + i * w * 0.28, p.y + h * 0.7 + 1.2, p.z + d * 0.3),
+          width: 2.2, height: 2.2, color: i % 2 ? '#d8542f' : '#c9a13a', alpha: 0.95, soft: true
+        });
+      }
+      S.billboard(P, { pos: v3(p.x, p.y + h * 0.72, p.z), width: 9, height: 9, color: '#ffd76a', alpha: 0.08, soft: true });
+      void time;
+    }
+
+    /** Blacksmith: stone forge with a glowing mouth, anvil and weapon rack. */
+    function blacksmith(P, p, time) {
+      const s = p.s;
+      // forge hut
+      S.box(P, { pos: v3(p.x, p.y + 4.4 * s, p.z), size: v3(13 * s, 8.8 * s, 11 * s), colours: { front: '#6f6455', back: '#5c5245', left: '#665c4f', right: '#665c4f', top: '#4e463c', bottom: '#3a342c' }, rot: v3(0, p.rot, 0) });
+      S.box(P, { pos: v3(p.x, p.y + 10 * s, p.z), size: v3(14.4 * s, 1.8 * s, 12.4 * s), colours: { all: '#4a3f34' }, rot: v3(0, p.rot, 0) });
+      const glowing = time ? 0.55 + Math.sin(time * 3.1 + p.i) * 0.12 : 0.55;
+      S.billboard(P, { pos: v3(p.x + Math.sin(p.rot) * 5.8 * s, p.y + 3.4 * s, p.z + Math.cos(p.rot) * 5.8 * s), width: 5 * s, height: 5 * s, color: '#ff8a3a', alpha: glowing, soft: true });
+      S.cylinder(P, { pos: v3(p.x, p.y + 6.6 * s, p.z), radius: 1.3 * s, height: 5 * s, sides: 5, color: '#544a40' });   // chimney
+      // anvil
+      S.box(P, { pos: v3(p.x + 9 * s, p.y + 2.4 * s, p.z - 2 * s), size: v3(4.6 * s, 1.4 * s, 2.2 * s), colours: { all: '#3d424c' } });
+      S.box(P, { pos: v3(p.x + 9 * s, p.y + 1.2 * s, p.z - 2 * s), size: v3(2.0 * s, 1.4 * s, 1.4 * s), colours: { all: '#2f333c' } });
+      S.billboard(P, { pos: v3(p.x + 9 * s, p.y + 3.6 * s, p.z - 2 * s), width: 4 * s, height: 4 * s, color: '#ffb347', alpha: 0.22, soft: true });
+      // weapon rack
+      [-1, 1].forEach(function (side) {
+        S.cylinder(P, { pos: v3(p.x - 8 * s + side * 2.4 * s, p.y + 2.6 * s, p.z), radius: 0.4 * s, height: 5.2 * s, sides: 4, color: '#6b5233' });
+      });
+      S.box(P, { pos: v3(p.x - 8 * s, p.y + 4.4 * s, p.z), size: v3(5.6 * s, 0.5 * s, 0.5 * s), colours: { all: '#6b5233' } });
+      for (let i = 0; i < 3; i++) {
+        S.box(P, { pos: v3(p.x - 10 * s + i * 2 * s, p.y + 5.6 * s, p.z), size: v3(0.4 * s, 3.4 * s, 0.9 * s), colours: { all: '#c3cbd8' } });
+      }
+    }
+
+    /** Central plaza: flagstones, a fountain and a market banner ring. */
+    function plaza(P, p) {
+      const stone = '#9a9182';
+      const dark = '#8b8274';
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * TAU;
+        const r0 = 5 + (i % 3) * 3.4, r1 = r0 + 3.2;
+        const ca = Math.cos(a), sa = Math.sin(a) * 0.78;
+        S.plate(P, [
+          v3(p.x + ca * r0 - sa * 2.2, p.y + 0.32, p.z + sa * r0 + ca * 2.2),
+          v3(p.x + ca * r1 - sa * 2.2, p.y + 0.32, p.z + sa * r1 + ca * 2.2),
+          v3(p.x + ca * r1 + sa * 2.2, p.y + 0.32, p.z + sa * r1 - ca * 2.2),
+          v3(p.x + ca * r0 + sa * 2.2, p.y + 0.32, p.z + sa * r0 - ca * 2.2)
+        ], { color: i % 2 ? stone : dark });
+      }
+      // fountain: basin + water + spout
+      S.cylinder(P, { pos: v3(p.x, p.y + 1.5, p.z), radius: 5.6, radiusTop: 5.9, height: 3, sides: 10, color: '#8d8474' });
+      S.cylinder(P, { pos: v3(p.x, p.y + 3.1, p.z), radius: 5.0, height: 0.6, sides: 10, color: '#3f7fa8', alpha: 0.85 });
+      S.cylinder(P, { pos: v3(p.x, p.y + 5.4, p.z), radius: 0.8, radiusTop: 0.5, height: 5, sides: 6, color: '#a89e8c' });
+      S.blob(P, { pos: v3(p.x, p.y + 8.4, p.z), radii: v3(1.9, 1.2, 1.9), slices: 5, rings: 2, color: '#bfe4f5', jitter: 0.2, seed: 7 });
+      // banner poles
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (c, i) {
+        const bx = p.x + c[0] * 15, bz = p.z + c[1] * 12;
+        S.cylinder(P, { pos: v3(bx, p.y + 6, bz), radius: 0.5, height: 12, sides: 5, color: '#6b5233' });
+        S.box(P, { pos: v3(bx + 1.8, p.y + 10.4, bz), size: v3(3.4, 2.6, 0.2), colours: { all: i % 2 ? '#2f6f8a' : '#b5432f' } });
+      });
+    }
+
+    /** Roadside signpost with a plank and a lantern hook. */
+    function signpost(P, p, time) {
+      S.cylinder(P, { pos: v3(p.x, p.y + 4.4, p.z), radius: 0.45, height: 8.8, sides: 5, color: '#6b5233' });
+      S.box(P, { pos: v3(p.x + 2.6, p.y + 8.0, p.z), size: v3(7.4, 1.9, 0.4), colours: { all: '#c9b184' }, rot: v3(0, p.rot, 0) });
+      S.box(P, { pos: v3(p.x - 2.4, p.y + 5.8, p.z), size: v3(6.2, 1.7, 0.4), colours: { all: '#b9a071' }, rot: v3(0, p.rot + 0.6, 0) });
+      lantern(P, { x: p.x + 4.2, z: p.z, y: p.y + 6.6, s: 1, i: p.i, v: p.v }, time);
+    }
+
+    /** Iron lantern on a post — glows at night. */
+    function lantern(P, p, time) {
+      const night = P.light && P.light.night ? 1 : 0.25;
+      const flicker = 0.86 + Math.sin((time || 0) * 5.3 + (p.v || 0) * 9) * 0.14;
+      S.cylinder(P, { pos: v3(p.x, p.y + 3, p.z), radius: 0.32, height: 6, sides: 4, color: '#3c3a42' });
+      S.box(P, { pos: v3(p.x, p.y + 6.6, p.z), size: v3(1.9, 2.4, 1.9), colours: { all: '#4a4750' } });
+      S.box(P, { pos: v3(p.x, p.y + 8, p.z), size: v3(2.4, 0.5, 2.4), colours: { all: '#3c3a42' } });
+      S.billboard(P, { pos: v3(p.x, p.y + 6.6, p.z), width: 8, height: 8, color: '#ffc46a', alpha: 0.18 + night * 0.3 * flicker, soft: true });
+      S.billboard(P, { pos: v3(p.x, p.y + 6.4, p.z), width: 3.2, height: 3.2, color: '#fff0c0', alpha: 0.3 + night * 0.5 * flicker, soft: true });
+    }
+
+    /**
+     * Village NPC: a robed figure with a floating name tag, plus a bobbing
+     * marker ("!" quest giver, "$" shop, "+" healer) above the head.
+     */
+    function npc(P, p, time) {
+      const t = time || 0;
+      const bob = Math.sin(t * 1.4 + p.i) * 0.4;
+      const y = p.y + bob;
+      const robe = p.v < 0.34 ? '#d9cfa8' : p.v < 0.67 ? '#2f6f8a' : '#7a3f8a';
+      const trim = p.v < 0.34 ? '#f2c14e' : p.v < 0.67 ? '#bfe4f5' : '#e0b0ff';
+      S.blob(P, { pos: v3(p.x, y + 6.4, p.z), radii: v3(3.4, 6.6, 3.2), slices: 6, rings: 3, color: robe, jitter: 0.12, seed: p.i + 2 });
+      S.blob(P, { pos: v3(p.x, y + 12.6, p.z), radii: v3(2.1, 2.2, 2.1), slices: 6, rings: 3, color: '#f2c79c', jitter: 0.1, seed: p.i + 4 });
+      S.box(P, { pos: v3(p.x, y + 4.4, p.z), size: v3(6.4, 1.0, 5.6), colours: { all: trim } });
+      S.box(P, { pos: v3(p.x, y + 10.4, p.z), size: v3(4.6, 1.0, 4.2), colours: { all: trim } });
+      S.billboard(P, { pos: v3(p.x, y + 14.4, p.z), width: 4.4, height: 4.4, color: trim, alpha: 0.22, soft: true });
+      // marker
+      const mark = p.mark || '!';
+      const my = y + 19 + Math.sin(t * 3 + p.i) * 0.7;
+      S.billboard(P, { pos: v3(p.x, my, p.z), width: 5.4, height: 5.4, color: mark === '!' ? '#ffd76a' : mark === '$' ? '#8fe3a0' : '#ff9ec4', alpha: 0.26, soft: true });
+      P.label(v3(p.x, my, p.z), mark, { size: 17, weight: '900', color: mark === '!' ? '#ffd76a' : mark === '$' ? '#8fe3a0' : '#ff9ec4' });
+      P.label(v3(p.x, y + 16.6, p.z), p.name || 'Villager', { size: 11.5, weight: '700', color: '#f0e9dc' });
+    }
+
+    /** Safe-zone ring on the plaza: a soft gold boundary plus ground glow. */
+    function safeZone(P, p, time) {
+      const pulse = 0.55 + Math.sin((time || 0) * 1.2) * 0.12;
+      S.ring(P, { x: p.x, z: p.z, radius: p.r, thickness: 2.6, color: '#ffd76a', alpha: 0.44 * pulse, segments: 54, y: p.y + 0.6 });
+      S.ring(P, { x: p.x, z: p.z, radius: p.r - 4, thickness: 1.2, color: '#fff0c0', alpha: 0.22 * pulse, segments: 54, y: p.y + 0.7 });
+      P.ellipseGround(p.x, p.z, p.r * 0.96, p.r * 0.78, '#ffd76a', 0.06 * pulse, p.y + 0.5);
     }
 
     /* --- detail grid: 128-unit buckets so culling is O(neighbourhood) --- */
@@ -1322,6 +1656,7 @@
     })();
 
     function drawDetail(P, cam, radius) {
+      P.tag && P.tag('detail');
       const eye = cam.state.eye;
       const CELL2 = 128;
       const cx = Math.floor(eye.x / CELL2);
@@ -1392,6 +1727,7 @@
 
     /** Smooth dirt road: overlapping ground strips with worn edges. */
     function drawRoad(P, time) {
+      P.tag && P.tag('road');
       if (theme_.id === 'chapter3' || theme_.id === 'chapter9' || theme_.id === 'chapter10') return;
       const eye = P.cam.state.eye;
       const half = 17;
@@ -1425,6 +1761,7 @@
     return {
       theme: theme_,
       heightAt: heightAt,
+      groundAt: heightAt,
       drawRoad: drawRoad,
       drawDetail: drawDetail,
       detailCount: detail.length,
@@ -1436,6 +1773,8 @@
       drawTerrain: drawTerrain,
       drawProps: drawProps,
       updateWeather: updateWeather,
+      updateAmbient: updateAmbient,
+      drawAmbient: drawAmbient,
       drawWeather: drawWeather,
       drawPost: drawPost,
       isPlayArea: function (x, z) { return inPlayArea(x, z, 0); }
