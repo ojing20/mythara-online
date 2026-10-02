@@ -44,7 +44,8 @@ const STAGE = args.stage || (SCENE === 'boss' ? 'c1-5' : 'c1-1');
     time: args.time === undefined ? undefined : parseFloat(args.time),
     skip: args.skip ? String(args.skip).split(',') : null,
     noClouds: !!args['no-clouds'],
-    render2d: !!args['render-2d']
+    render2d: !!args['render-2d'],
+    wedgeDebug: !!args.wedge
   });
 
   await h.signIn({});

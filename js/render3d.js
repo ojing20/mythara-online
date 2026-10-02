@@ -328,6 +328,7 @@
       }
 
       const SKIP = root.__MM_SKIP__ || {};
+      if (root.__MM_WEDGE__) debugWedge(P, world);
       const prof = root.__MM_PROFILE__ ? state.profile : null;
       const tRender = prof ? (root.__MM_CLOCK__ || function () { return Date.now(); })() : 0;
       const clock = root.__MM_CLOCK__ || function () { return root.performance && root.performance.now ? root.performance.now() : Date.now(); };
@@ -531,6 +532,19 @@
       }
       P.flush();
       return true;
+    }
+
+    /**
+     * Development hook: paint every terrain quad that is much brighter than its
+     * neighbours magenta, so colour/shading artifacts are obvious in a frame.
+     * Enabled with __MM_WEDGE__ (render harness only).
+     */
+    function debugWedge() {
+      // the highlight is produced inside the painter + terrain (see render3d-core/world)
+      state.wedgeDebug = true;
+      state.painter.brightDebug = true;
+      const world = state.world;
+      if (world) world.wedgeDebug = true;
     }
 
     /* ---------------- minimap ---------------- */

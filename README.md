@@ -251,10 +251,12 @@ phones. `?time=0..1` pins the time of day.
 | Village (Silverstone Beginning) | Central plaza with fountain and banner poles, houses, a well, market stalls, a blacksmith forge with anvil and weapon rack, lanterns, a safe-zone ground ring and three NPCs (quest giver **!**, trader **$**, healer **+**) with floating name tags |
 | Road furniture | Split-rail fences, signposts and lanterns follow the road; scenery is kept out of the road corridor and the village plaza |
 | Ambient life | Fireflies and lantern/village glow after dark, drifting leaves and dust motes by day, footstep dust on dry ground and splashes when walking through water |
+| Water | A flat water plane with a gentle swell and shoreline foam where cells are barely submerged, so banks rise out of the water instead of water stacking into terraces |
+| Artefact fixes | Terrain culling now keeps heavily foreshortened near cells (no more sky showing through under the camera), the road is fine-segmented so it hugs hills, and the plaza/market/blacksmith/NPC set is limited to the hometown chapter |
 | Performance | Density LOD thins distant scenery deterministically, closed shapes back-face cull, small furniture is near-only, and the Low/Medium/High presets scale prop distance, detail distance, render scale and weather density |
 
-Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈22 ms median** in the hub
-village and **≈23 ms median** in a chapter-1 battle (p90 ≈ 47 ms). A real browser with a
+Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈28 ms median** in the hub
+village and **≈27 ms median** in a chapter-1 battle (p90 ≈ 49–67 ms). A real browser with a
 GPU-backed canvas is several times faster.
 
 ### Development tools (`tools/`)

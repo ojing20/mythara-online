@@ -40,6 +40,7 @@ node tools/render-check.js tools/shots --scene=hub --class=fireMage --time=0.8
 | `--skip=terrain,detail` | skip render sections while debugging |
 | `--no-clouds` | disable the cloud layer |
 | `--render-2d` | boot the legacy 2D renderer (regression check for the fallback path) |
+| `--wedge` | dev artifact hunt: colour-code fills by layer (props magenta, road blue, detail yellow, terrain cyan, actors orange) so holes and pale bands can be traced to a source |
 
 ## render-suite.js — batch sheets
 
@@ -66,8 +67,9 @@ actors, flush, weather, labels, post) and a `fills/frame by layer` line (props, 
 actors, road) for spotting hot layers. The 3D renderer is a software rasteriser, so these numbers
 are a CPU-only baseline: a real browser with a GPU-backed canvas is several times faster.
 
-Current baseline in the hub village: ≈22 ms median / p90 48 ms; chapter-1 battle: ≈23 ms median /
-p90 47 ms (960×540, high quality, `--frames=60`).
+Current baseline in the hub village: ≈28 ms median / p90 49 ms; chapter-1 battle: ≈27 ms median /
+p90 67 ms (960×540, high quality, `--frames=60`). The p90/max figures include V8 GC pauses; the
+section breakdown excludes them.
 
 ## Notes
 

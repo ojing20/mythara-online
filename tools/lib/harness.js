@@ -36,6 +36,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string[]} [o.skip]   render sections to skip (__MM_SKIP__)
  * @param {boolean} [o.noClouds] disable the cloud layer
  * @param {boolean} [o.profile] collect per-section frame timings
+ * @param {boolean} [o.wedgeDebug] highlight pale terrain quads (dev artifact hunt)
  * @param {number}  [o.width]   canvas width in CSS pixels (default 960)
  * @param {number}  [o.height]  canvas height in CSS pixels (default 540)
  */
@@ -113,6 +114,7 @@ async function createHarness(o) {
       }
       if (opts.noClouds) window.__MM_NO_CLOUDS__ = true;
       if (opts.profile) window.__MM_PROFILE__ = true;
+      if (opts.wedgeDebug) window.__MM_WEDGE__ = true;
       // deterministic high-resolution clock for the section profiler
       window.__MM_CLOCK__ = () => Number(process.hrtime.bigint()) / 1e6;
       window.addEventListener('error', (e) => errors.push(String((e.error && e.error.stack) || e.message)));

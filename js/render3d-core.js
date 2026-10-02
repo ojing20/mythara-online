@@ -570,6 +570,14 @@
       if (t) t.push(nowMs());
       if (st.fill) {
         c.fillStyle = st.fill;
+        // dev: colour-code fills by layer so artifacts can be traced to a source
+        if (P.brightDebug && P.tag) {
+          const TINT = {
+            props: '#ff00ff', road: '#0044ff', detail: '#ffee00',
+            terrain: '#00ffff', actors: '#ff8800', labels: '#888888'
+          };
+          if (TINT[P.tag]) c.fillStyle = TINT[P.tag];
+        }
         c.fill();
         if (t) t.push(nowMs());
         P.stats.fills++;
@@ -848,12 +856,20 @@
       Colour: Colour,
       Colour3: null
     };
-    // live accessors so modules can read painter.cam / .vp / .ctx / .light directly
-    ['ctx', 'cam', 'vp', 'light', 'theme', 'list', 'stats'].forEach(function (key) {
+    // live accessors so modules can read painter.cam / .vp / .ctx / .light directly.
+    // (Without these, assigning facade.slowLog/brightDebug would only set a copy
+    // on the facade — the internal painter object is what actually reads them.)
+    ['ctx', 'cam', 'vp', 'light', 'theme', 'list', 'stats', 'tagStats', 'slowLog'].forEach(function (key) {
       Object.defineProperty(facade, key, {
         enumerable: true,
-        get: function () { return P[key]; }
+        get: function () { return P[key]; },
+        set: function (value) { P[key] = value; }
       });
+    });
+    Object.defineProperty(facade, 'brightDebug', {
+      enumerable: true,
+      get: function () { return !!P.brightDebug; },
+      set: function (value) { P.brightDebug = !!value; }
     });
     return facade;
   }

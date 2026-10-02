@@ -407,6 +407,10 @@
      * fences, lanterns, a safe-zone ring and NPCs (quest giver, shop, healer).
      * All decorative: the walkable field and the combat rules are unchanged.
      */
+    // Silverstone Beginning is the hometown: it gets the plaza, market,
+    // blacksmith, safe zone and NPCs. Other regions with houses stay hamlets —
+    // a market square in the desert or the swamp would be out of place.
+    const HOMETOWN = theme_.id === 'hub' || theme_.id === 'chapter1';
     if (props.village) {
       const V = VILLAGE;
       for (let i = 0; i < props.village; i++) {
@@ -415,29 +419,28 @@
         const z = 400 - (250 + rand(i, 22) * 110);
         list.push({ type: 'house', x: x, z: z, y: heightAt(x, z), s: 0.9 + rand(i, 23) * 0.5, rot: rand(i, 24) * TAU, v: rand(i, 25), i: i, lamp: true });
       }
-      // plaza furniture
       const vy = heightAt(V.x, V.z);
-      list.push({ type: 'plaza', x: V.x, z: V.z, y: vy, s: 1, rot: 0, v: 0.5, i: 1 });
-      list.push({ type: 'safeZone', x: V.x, z: V.z, y: vy, r: 74, s: 1, rot: 0, v: 0.5, i: 2 });
       list.push({ type: 'well', x: V.x - 30, z: V.z - 6, y: heightAt(V.x - 30, V.z - 6), s: 1, rot: 0, v: 0.5, i: 0 });
-      list.push({ type: 'blacksmith', x: V.x + 46, z: V.z + 26, y: heightAt(V.x + 46, V.z + 26), s: 1, rot: -0.5, v: 0.6, i: 3 });
-      [[-26, 30, 0.2], [22, 34, 2.2], [-4, 44, 1.2]].forEach(function (c, i) {
-        const x = V.x + c[0], z = V.z + c[1];
-        list.push({ type: 'market', x: x, z: z, y: heightAt(x, z), s: 1, rot: c[2], v: i === 1 ? 0.8 : 0.3, i: i + 4 });
-      });
-      // NPCs: quest giver, shop keeper, healer — own spots, never on the plaza itself
-      [
-        { x: V.x - 16, z: V.z + 16, name: 'Warden Ilsa', mark: '!', v: 0.2 },
-        { x: V.x + 14, z: V.z - 18, name: 'Trader Bex', mark: '$', v: 0.5 },
-        { x: V.x - 22, z: V.z - 20, name: 'Healer Sora', mark: '+', v: 0.85 }
-      ].forEach(function (n, i) {
-        list.push({ type: 'npc', x: n.x, z: n.z, y: heightAt(n.x, n.z), s: 1, rot: 0, v: n.v, i: i + 1, name: n.name, mark: n.mark });
-      });
-      // lanterns + fences around the plaza rim
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + 0.5;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.5;
         const x = V.x + Math.cos(a) * 88, z = V.z + Math.sin(a) * 74;
         list.push({ type: 'lantern', x: x, z: z, y: heightAt(x, z), s: 1, rot: 0, v: rand(i, 71), i: i + 11 });
+      }
+      if (HOMETOWN) {
+        list.push({ type: 'plaza', x: V.x, z: V.z, y: vy, s: 1, rot: 0, v: 0.5, i: 1 });
+        list.push({ type: 'safeZone', x: V.x, z: V.z, y: vy, r: 74, s: 1, rot: 0, v: 0.5, i: 2 });
+        list.push({ type: 'blacksmith', x: V.x + 46, z: V.z + 26, y: heightAt(V.x + 46, V.z + 26), s: 1, rot: -0.5, v: 0.6, i: 3 });
+        [[-26, 30, 0.2], [22, 34, 2.2], [-4, 44, 1.2]].forEach(function (c, i) {
+          const x = V.x + c[0], z = V.z + c[1];
+          list.push({ type: 'market', x: x, z: z, y: heightAt(x, z), s: 1, rot: c[2], v: i === 1 ? 0.8 : 0.3, i: i + 4 });
+        });
+        [
+          { x: V.x - 16, z: V.z + 16, name: 'Warden Ilsa', mark: '!', v: 0.2 },
+          { x: V.x + 14, z: V.z - 18, name: 'Trader Bex', mark: '$', v: 0.5 },
+          { x: V.x - 22, z: V.z - 20, name: 'Healer Sora', mark: '+', v: 0.85 }
+        ].forEach(function (n, i) {
+          list.push({ type: 'npc', x: n.x, z: n.z, y: heightAt(n.x, n.z), s: 1, rot: 0, v: n.v, i: i + 1, name: n.name, mark: n.mark });
+        });
       }
     }
     if (props.castle === 'tower' || props.castle === 'watchtower') {
@@ -544,19 +547,24 @@
     pine: '#2f5c3a', pineDark: '#20412a', snow: '#f2f8ff'
   };
 
-  function treeConifer(P, p, t) {
-    const h = 40 * p.s;
-    S.cylinder(P, { pos: v3(p.x, p.y + h * 0.18, p.z), radius: 1.1 * p.s, radiusTop: 0.7 * p.s, height: h * 0.4, sides: 6, color: PALETTE.trunk });
-    for (let i = 0; i < 3; i++) {
-      const t2 = i / 3;
-      S.cone(P, {
-        pos: v3(p.x, p.y + h * (0.34 + t2 * 0.42), p.z),
-        radius: (6.2 - t2 * 2.2) * p.s, height: (12 - t2 * 2.4) * p.s, sides: 6,
-        color: i === 0 ? PALETTE.pineDark : PALETTE.pine, yaw: p.rot + i
-      });
-    }
-    if (p.v > 0.55) {
-      S.cone(P, { pos: v3(p.x, p.y + h * 0.95, p.z), radius: 3.6 * p.s, height: 3.4 * p.s, sides: 6, color: '#f4faff' });
+  function treeConifer(P, p, t, theme_) {
+    const h = 33 * p.s;
+    const sway = Math.sin(t * 0.55 + p.v * 7) * 0.22;
+    S.cylinder(P, { pos: v3(p.x + sway * 0.3, p.y + h * 0.13, p.z), radius: 1.3 * p.s, radiusTop: 0.9 * p.s, height: h * 0.3, sides: 6, color: PALETTE.trunkDark });
+    // two broad crowns: a real pine silhouette rather than a thin rocket
+    S.cone(P, {
+      pos: v3(p.x + sway * 0.6, p.y + h * 0.44, p.z),
+      radius: 8.4 * p.s, height: 17 * p.s, sides: 6,
+      color: PALETTE.pineDark, yaw: p.rot
+    });
+    S.cone(P, {
+      pos: v3(p.x + sway, p.y + h * 0.74, p.z),
+      radius: 5.9 * p.s, height: 13 * p.s, sides: 6,
+      color: PALETTE.pine, yaw: p.rot + 0.4
+    });
+    const snowy = theme_ && (theme_.id === 'chapter4' || theme_.id === 'hub');
+    if (p.v > 0.62 && snowy) {
+      S.cone(P, { pos: v3(p.x + sway, p.y + h * 0.93, p.z), radius: 3.4 * p.s, height: 3.2 * p.s, sides: 6, color: '#f4faff' });
     }
     void t;
   }
@@ -1045,7 +1053,16 @@
         if (depth < 6) continue;
         const s = cam.projectInto(SCRATCH[4], v3(q.cx, q.ch, q.cz), vp);
         if (!s.visible) continue;
-        if (s.x < -220 || s.x > vp.width + 220 || s.y < -160 || s.y > vp.height + 260) continue;
+        // Screen-space cull for the far field only. Near cells are heavily
+        // foreshortened — their centre projects small while their corners cover
+        // the whole screen bottom, so a centre-based radius test punched
+        // sky-through holes in the floor. The near ring is a few dozen quads, so
+        // it is simply always drawn; distant cells use a radius scaled by the
+        // quad's projected size.
+        if (d2 > 300 * 300) {
+          const rpx = s.scale * (CELL * 0.8 + OVERLAP) + 8;
+          if (s.x + rpx < -32 || s.x - rpx > vp.width + 32 || s.y + rpx < -32 || s.y - rpx > vp.height + 32) continue;
+        }
         const b = Math.min(buckets.length - 1, Math.floor(Math.sqrt(d2) / bucketSize));
         buckets[b].push(q);
       }
@@ -1085,6 +1102,9 @@
       // subtle per-quad variation keeps large fields from looking flat
       const v = q.shade || (q.shade = 0.975 + Noise.value(q.cx / 130, q.cz / 130, 31) * 0.05);
       const rgb = { r: base.r * amount * v, g: base.g * amount * v, b: base.b * amount * v };
+      if (P.state.wedgeDebug && base.r + base.g + base.b > 470) {
+        rgb.r = 255; rgb.g = 0; rgb.b = 255;      // dev: flag suspiciously pale quads
+      }
       const eye = P.cam.state.eye;
       const dx = q.cx - eye.x, dz = q.cz - eye.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
@@ -1096,13 +1116,22 @@
       P.state.stats.polys++;
     }
 
+    /** Still-water surface height for this theme (the carved channel level). */
+    function waterSurface() {
+      const type = theme_.props && theme_.props.water;
+      const bed = type === 'lake' || type === 'frozen' ? 9 : type === 'swamp' ? 2 : type === 'pond' ? 7 : 5;
+      return bed - 2.4;
+    }
+
     function drawWaterQuad(P, q, time, normal) {
       const w = q.water;
       const dist = M.v3dist(P.cam.state.eye, v3(q.cx, q.ch, q.cz));
       const themeWater = theme_.id === 'chapter6' ? '#3f4a2a' : theme_.id === 'chapter8' ? '#ff6a2a'
         : theme_.id === 'chapter4' ? '#cfeaf7' : theme_.id === 'chapter3' ? '#1d2a3a' : '#2f5f8a';
       const shimmer = 0.5 + 0.5 * Math.sin(time * 1.7 + q.cx * 0.05 + q.cz * 0.07);
-      const y = q.ch - 0.6 + Math.sin(time * 0.9 + q.cx * 0.02) * 0.18;
+      // a flat water plane with a gentle swell — banks rise out of it naturally
+      const level = waterSurface();
+      const y = level + Math.sin(time * 0.9 + q.cx * 0.02) * 0.16;
       const base = Colour.toRgb(Colour.mix(themeWater, theme_.skyBottom, 0.22 + shimmer * 0.18));
       const sun = Colour.toRgb(P.light.sun);
       const spec = Math.pow(shimmer, 3) * 0.5 * (theme_.id === 'chapter8' ? 1.4 : 1);
@@ -1111,6 +1140,14 @@
         g: base.g * (0.75 + shimmer * 0.2) + sun.g * spec,
         b: base.b * (0.75 + shimmer * 0.25) + sun.b * spec
       };
+      // shoreline foam: cells that are barely submerged read as a pale rim
+      if (w < 0.3) {
+        const foam = clamp(1 - w / 0.3, 0, 1) * 0.55;
+        const shore = Colour.toRgb('#eaf6ff');
+        rgb.r = lerp(rgb.r, shore.r, foam);
+        rgb.g = lerp(rgb.g, shore.g, foam);
+        rgb.b = lerp(rgb.b, shore.b, foam);
+      }
       const pts = SCRATCH;
       for (let i = 0; i < 4; i++) {
         tmpPts[i].y = y;
@@ -1454,7 +1491,8 @@
         if (!keepProp(p, Math.sqrt(d2), lod)) continue;
         const s = cam.project(v3(p.x, p.y + 6, p.z), P.vp);
         if (!s.visible) continue;
-        if (s.x < -300 || s.x > P.vp.width + 300 || s.y < -320 || s.y > P.vp.height + 320) continue;
+        const rp = s.scale * 22 * (p.s || 1) + 8;       // prop bounding radius on screen
+        if (s.x + rp < -8 || s.x - rp > P.vp.width + 8 || s.y + rp < -8 || s.y - rp > P.vp.height + 8) continue;
         drawProp(P, p, time, theme_);
       }
     }
@@ -1474,7 +1512,7 @@
           P.shadow(p.x, p.z, 3 * p.s, 2 * p.s, 0.32, y + 0.35);
       }
       switch (props2.type) {
-        case 'tree:conifer': treeConifer(P, p, time); break;
+        case 'tree:conifer': treeConifer(P, p, time, theme__); break;
         case 'tree:broadleaf': treeBroadleaf(P, p, time); break;
         case 'tree:giant': treeGiant(P, p, time); break;
         case 'tree:dead': treeDead(P, p, time); break;
@@ -1726,33 +1764,51 @@
     }
 
     /** Smooth dirt road: overlapping ground strips with worn edges. */
+    /**
+     * Dirt road: short segments that follow the terrain instead of long flat
+     * plates. Each segment samples the height field at its own corners, so the
+     * path bends over hills and never floats above a dip or cuts through a rise.
+     * The road stays inside the field — outside it the mountain rim takes over.
+     */
     function drawRoad(P, time) {
       P.tag && P.tag('road');
       if (theme_.id === 'chapter3' || theme_.id === 'chapter9' || theme_.id === 'chapter10') return;
       const eye = P.cam.state.eye;
-      const half = 17;
-      const step = 54;
-      for (let x = -360; x < 1420; x += step) {
-        const x2 = x + step;
+      const half = 14;
+      const step = 15;                       // fine enough to hug the height field
+      const x0 = PLAY.minX - 26, x1 = PLAY.maxX + 26;
+      const endFade = 90;                    // dissolve into the grass at both ends
+      // dirt, not chalk: shade the palette path down and keep it close to the
+      // ground colour so it reads as trodden earth rather than a pale band
+      const pathColour = Colour.mix(Colour.shade(theme_.ground.path, -0.16), theme_.ground.base, 0.34);
+      const vergeColour = Colour.mix(theme_.ground.path, theme_.ground.base, 0.78);
+      const y = function (px, pz) { return heightAt(px, pz) + 0.28; };
+      for (let x = x0; x < x1; x += step) {
+        const x2 = Math.min(x + step, x1);
         const c1 = roadCentre(x), c2 = roadCentre(x2);
         const midX = (x + x2) / 2, midZ = (c1 + c2) / 2;
-        if (M.v3dist(eye, v3(midX, 0, midZ)) > 900) continue;
-        const y = function (px, pz) { return heightAt(px, pz) + 0.3; };
-        const fade = clamp(1 - M.v3dist(eye, v3(midX, 0, midZ)) / 900, 0, 1);
+        const dist = M.v3dist(eye, v3(midX, 0, midZ));
+        if (dist > 820) continue;
+        const fade = clamp(1 - dist / 820, 0, 1) *
+          clamp(Math.min(x - x0, x1 - x) / endFade, 0, 1) *
+          clamp(Math.min(midZ - PLAY.minZ, PLAY.maxZ - midZ) / 40, 0, 1) *
+          clamp((dist - 55) / 55, 0, 1);       // don't smear right under the camera
+        if (fade <= 0.02) continue;
         S.plate(P, [
           v3(x, y(x, c1 - half), c1 - half),
           v3(x2, y(x2, c2 - half), c2 - half),
           v3(x2, y(x2, c2 + half), c2 + half),
           v3(x, y(x, c1 + half), c1 + half)
-        ], { color: Colour.mix(theme_.ground.path, theme_.ground.base, 0.45), alpha: 0.55 * fade, lit: true });
-        // soft worn verge on both sides
+        ], { color: pathColour, alpha: 0.6 * fade, lit: true });
+        // soft worn verge on both sides (only where it is actually visible)
+        if (dist > 420) continue;
         [-1, 1].forEach(function (side) {
           S.plate(P, [
             v3(x, y(x, c1 + side * half), c1 + side * half),
             v3(x2, y(x2, c2 + side * half), c2 + side * half),
-            v3(x2, y(x2, c2 + side * (half + 9)), c2 + side * (half + 9)),
-            v3(x, y(x, c1 + side * (half + 9)), c1 + side * (half + 9))
-          ], { color: Colour.mix(theme_.ground.path, theme_.ground.base, 0.7), alpha: 0.32 * fade });
+            v3(x2, y(x2, c2 + side * (half + 7)), c2 + side * (half + 7)),
+            v3(x, y(x, c1 + side * (half + 7)), c1 + side * (half + 7))
+          ], { color: vergeColour, alpha: 0.24 * fade });
         });
       }
       void time;
