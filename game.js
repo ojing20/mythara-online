@@ -901,7 +901,6 @@
       ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
       aiOffset: Utils.randInt(0, 4),
       leash: def.leashRange || (def.boss || def.tier === 'boss' ? 620 : 340),
-      detectTimer: 0,
       losTimer: Utils.randRange(0, 0.4),
       patrolTarget: null,
       attackCooldown: 0,
@@ -942,7 +941,6 @@
       ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
       aiOffset: Utils.randInt(0, 4),
       leash: def.leashRange || 340,
-      detectTimer: 0,
       losTimer: Utils.randRange(0, 0.4),
       patrolTarget: null,
       attackCooldown: 0,
@@ -4829,7 +4827,6 @@
         monster.canSee = player.downed || hidden ? false : lineOfSight(monster, player);
       }
       const playerVisible = !player.downed && !hidden && distanceToPlayer <= aggroRange && monster.canSee !== false;
-      const angry = ai.state === 'chase' || ai.state === 'attack';
 
       const goHome = function () {
         ai.state = 'return';
@@ -4927,7 +4924,6 @@
       }
 
       Anim.update(monster, dt, monster.aggro ? 'walk' : 'idle');
-      void angry;
       clampToWorld(monster);
     }
 
