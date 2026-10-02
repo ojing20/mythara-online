@@ -362,9 +362,17 @@ The server suite ships in the repository and runs with no dependencies:
 node --test                   # 13 server checks (register, login, conflicts, restart)
 ```
 
-Presentation work is verified with the `tools/` render harnesses, which boot the real game
-headlessly and write PNG frames (`render-check.js` for one scene, `render-suite.js` for the 10
-chapters / 10 bosses / 10 hero previews, `render-perf.js` for frame cost).
+```bash
+npm --prefix tools install
+node tools/gameflow-check.js                       # 15 functional checks (systems still work)
+node tools/render-suite.js tools/shots/suite --what=anim    # 7 hero animation states, must differ
+node tools/render-suite.js tools/shots/suite --what=camera  # 13 camera-control checks
+node tools/render-check.js tools/shots --scene=battle --frames=40 --combat
+node tools/render-perf.js                          # per-section frame cost
+```
+
+The render harnesses boot the real game headlessly and write PNG frames for review; `render-suite`
+also asserts the hero animation states and camera controls rather than only producing images.
 
 
 | Suite | Checks | Covers |

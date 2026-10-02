@@ -962,10 +962,10 @@
       if (a.telegraph > 0 && !a.dead) {
         const radius = a.telegraphRadius || (actor.radius || 18) * 4;
         const grow = 0.35 + a.telegraph * 0.65;
-        P.ellipseGround(actor.pos.x, actor.pos.y, radius * grow, radius * grow * 0.62, '#ff6b4a', 0.16 + a.telegraph * 0.2, 0.6);
+        P.ellipseGround(actor.pos.x, actor.pos.y, radius * grow, radius * grow * 0.62, '#c8342c', 0.10 + a.telegraph * 0.14, 0.6);
         S.ring(P, {
           x: actor.pos.x, z: actor.pos.y, radius: radius * grow, thickness: 3.4,
-          color: '#ff9a6a', alpha: 0.55 + a.telegraph * 0.4, segments: 30
+          color: '#ff8a5c', alpha: 0.4 + a.telegraph * 0.35, segments: 30
         });
         S.ring(P, {
           x: actor.pos.x, z: actor.pos.y, radius: radius * (0.25 + a.telegraph * 0.6), thickness: 2,

@@ -45,11 +45,26 @@ node tools/render-check.js tools/shots --scene=hub --class=fireMage --time=0.8
 node tools/render-suite.js tools/shots/suite --what=chapters   # 10 chapter environments
 node tools/render-suite.js tools/shots/suite --what=bosses     # every chapter boss
 node tools/render-suite.js tools/shots/suite --what=classes    # all 10 hero previews
+node tools/render-suite.js tools/shots/suite --what=anim       # idle/walk/run/attack/skill/hit/death
+node tools/render-suite.js tools/shots/suite --what=camera     # follow, rotate, zoom, lock-on
 node tools/render-suite.js tools/shots/suite --what=combat     # swings, hub dusk/night
 node tools/render-suite.js tools/shots/suite --what=all
 ```
 
-Writes one PNG per entry plus `suite.json` with per-entry timings and any failures.
+Writes one PNG per entry plus `suite.json` with per-entry timings and any failures. The `anim`
+suite compares coarse canvas signatures and fails if two animation states render identically; the
+`camera` suite drives the real DOM event paths (mouse drag, touch drag, wheel, Q/E, R) and fails on
+any camera regression (13 checks).
+
+## gameflow-check.js — do the game systems still work?
+
+```bash
+node tools/gameflow-check.js              # 15 checks, exits non-zero on failure
+```
+
+Boots with the 3D layer enabled and drives the real flows: registration, character creation,
+stage unlock rules, adventure battle, melee damage, skill hotbar, potion use, leaving a fight,
+the app screens, save/reload and a bot arena duel.
 
 ## render-perf.js — frame cost
 
