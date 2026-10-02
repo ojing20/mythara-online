@@ -221,6 +221,43 @@ Dark-fantasy theme with gold accents, large tappable buttons, animated panels, p
 portraits, icons and a battle HUD (wave counter, objective, boss bar with phase, potion bar).
 Layouts adapt to desktop, tablet and phone widths, and combat is comfortable in landscape.
 
+## 3D presentation layer (v0.5.0-3d)
+
+The game now renders its world with a **software 3D renderer** — a depth-sorted painter's
+algorithm (flat lambert lighting, aerial-perspective fog, back-face culling, ring-stack geometry)
+drawn onto the same 2D canvas the engine always used. No WebGL, no CDN, no build step, and no
+copyrighted assets: every mesh, monster and prop is generated from code and the existing data
+files. The original 2D renderer stays in the build untouched and can be selected with
+`?render=2d`.
+
+| Feature | Detail |
+| --- | --- |
+| Camera | Third-person, behind the character, follows with smoothing, pitch/zoom/rotate, lock-on to the current target |
+| Environments | 12 themed biomes (hub + 10 chapters + arena) with terrain height fields, carved water channels, a dirt road, props (trees, rocks, villages, castles, ruins, crystals, braziers), dynamic sun/sky/day-night cycle, fog, weather particles and post-grade tints |
+| Heroes | All 10 classes share one rig with per-class armour, capes, hoods, helmets, pauldrons, shields and weapons (bow/quiver, staves, daggers, dual blades, greataxe, great-swords) plus idle, walk, run, attack, skill, hit and death animation states |
+| Monsters & bosses | Body archetypes (beast, goblin, skeleton, golem, treant, wraith, bat, serpent, scorpion, blob, elemental) with animated limbs, hit flashes, HP/name plates, boss auras, target rings and telegraphs |
+| Combat | Weapon swings, impact bursts, spell particles (fire/ice/lightning/holy), floating damage and crit numbers, screen shake, ground decals, projectiles |
+| UI | Loading screen with animated logo, percentage and rotating tips; gold-ringed portrait, level/class, ornate HP/MP/XP bars, equipment slots, skill hotbar, quest tracker, minimap, chat frame, wallet (coins/gems/potions) and a boss HP bar |
+
+Quality presets (`?quality=low|medium|high`, default `auto`) scale view distance and detail for
+phones. `?time=0..1` pins the time of day.
+
+### Development tools (`tools/`)
+
+Headless render harnesses that boot the real game in jsdom with a Skia-backed canvas, drive the
+real login/character/stage flow and write PNG frames for visual review:
+
+```bash
+npm install --no-save jsdom @napi-rs/canvas
+export NODE_PATH="$PWD/node_modules"
+node tools/render-check.js tools/shots --scene=battle --stage=c1-1 --frames=40 --combat
+node tools/render-suite.js tools/shots/suite --what=chapters
+node tools/render-perf.js --stage=c8-5
+```
+
+See `tools/README.md` for every option. These are dev-only scripts: the shipped game keeps its
+zero-dependency, no-build-step rule.
+
 ## Cloud accounts — MYTHARA SERVER → DATABASE → Phone · PC · Tablet
 
 `node server/server.js` hosts the game **and** the account API on one origin (zero dependencies —
@@ -303,6 +340,14 @@ server, so you can play from a local folder and still sync.
 | `js/ui.js` | Every app screen (auth, menu, adventure, arena, inventory, equipment, summon, quests, shop, settings) plus modals, toasts and the battle HUD |
 | `js/app.js` | Flow controller: loading → auth → menu → select → battle → rewards, saving, settings, account sync and legacy-save import |
 | `js/sync.js` | `MytharaSync`: server detection, cloud auth backend, push/pull/reconcile, conflict merge, offline queue |
+| `style-mmorph.css` | MMORPG skin: cinematic loading screen, gold-ringed portrait, ornate bars, wallet, minimap, quest tracker, chat frame, boss bar |
+| `js/render3d.js` | 3D facade: camera follow/lock-on, frame pipeline, day-night, quality presets, minimap, HUD, class preview, 2D fallback switch |
+| `js/render3d-core.js` | Math (vec3/mat4), value + fBm noise, colour helpers, lighting model, camera, depth-sorted painter with fog |
+| `js/render3d-shapes.js` | Procedural geometry: box, plate, cylinder, cone, blob, billboard, ribbon, ring, grass blade |
+| `js/render3d-world.js` | Biome themes, terrain height fields, water carving, road, prop scatter, sky/horizon/weather/post passes |
+| `js/render3d-actors.js` | Hero rig (10 classes + equipment), monster archetypes, animation states, name/HP plates |
+| `js/render3d-vfx.js` | Combat visuals: swings, impacts, spells, projectiles, decals, floating numbers |
+| `tools/` | Development-only headless render harnesses (jsdom + Skia canvas) — see `tools/README.md` |
 | `server/server.js` | Zero-dependency static host + API (`node server/server.js`), LAN URL banner, graceful DB flush |
 | `server/api.js` | Routes, `Bearer` auth, body/profile caps, CORS, revision conflict responses |
 | `server/auth.js` | scrypt hashing, credential validation, token minting, `publicAccount()` |
@@ -311,12 +356,15 @@ server, so you can play from a local folder and still sync.
 
 ### Tests
 
-Seven suites cover the build — 514 checks total. The server suite ships in the repository and runs
-with no dependencies; the six jsdom/canvas suites run from a local harness:
+The server suite ships in the repository and runs with no dependencies:
 
 ```bash
 node --test                   # 13 server checks (register, login, conflicts, restart)
 ```
+
+Presentation work is verified with the `tools/` render harnesses, which boot the real game
+headlessly and write PNG frames (`render-check.js` for one scene, `render-suite.js` for the 10
+chapters / 10 bosses / 10 hero previews, `render-perf.js` for frame cost).
 
 
 | Suite | Checks | Covers |
@@ -326,7 +374,7 @@ node --test                   # 13 server checks (register, login, conflicts, re
 | `storage.test.js` | 6 | Storage-blocked fallback paths |
 | `appflow.js` | 133 | Loading → register → menu → select → stage battle → bosses → arena → shop/summon → save/reload |
 | `campaign.test.js` | 113 | All 50 stages and 10 bosses, unlocks, energy, quests, dailies, equipment, mobile, login variants, legacy import |
-| `server/tests/api.test.js` | 12 | Register/login, hashed storage, two devices pulling one account, 409 conflicts, token revocation, restart persistence |
+| `server/tests/api.test.js` | 13 | Register/login, hashed storage, two devices pulling one account, 409 conflicts, token revocation, restart persistence |
 | `sync.test.js` | 35 | Three jsdom "devices" (PC, phone, same-origin tablet) against a real server: same coins/items/stages/levels, offline edits merge instead of clobbering, logout revokes the token |
 
 ## Roadmap (not implemented yet)

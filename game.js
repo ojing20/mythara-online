@@ -1234,6 +1234,15 @@
     function init(canvas) {
       ctx.canvas = canvas;
       ctx.ctx2d = canvas.getContext('2d');
+      // MMORPG presentation layer: when present it takes over the frame
+      // (its own camera, world, rigs and VFX). The 2D renderer below stays
+      // intact as the fallback, so nothing about the engine changes.
+      if (root.MytharaRender3D && root.MytharaRender3D.attach(canvas)) {
+        ctx.use3d = true;
+        if (ctx.background === null) ctx.background = null;
+        if (root.document && root.document.body) root.document.body.classList.add('render-3d');
+        return ctx.ctx2d;
+      }
       ctx.background = buildBackground();
       resize();
       if (root.addEventListener) root.addEventListener('resize', resize);
@@ -1242,6 +1251,10 @@
 
     function resize() {
       if (!ctx.canvas) return;
+      if (ctx.use3d && root.MytharaRender3D && root.MytharaRender3D.isReady()) {
+        root.MytharaRender3D.resize();
+        return;
+      }
       const dpr = Math.min(root.devicePixelRatio || 1, 2);
       ctx.dpr = dpr;
       ctx.canvas.width = Math.round(WORLD.width * dpr);
@@ -1255,6 +1268,13 @@
     function render(state) {
       const c = ctx.ctx2d;
       if (!c) return;
+
+      // 3D MMORPG frame (sky, terrain, props, rigs, VFX, weather, labels)
+      if (ctx.use3d && root.MytharaRender3D && root.MytharaRender3D.isReady()) {
+        root.MytharaRender3D.render(state, state.lastDeltaSeconds || 0.0167);
+        root.MytharaRender3D.tickHud(state.lastDeltaSeconds || 0.0167, state);
+        return;
+      }
 
       c.save();
       const shake = Effects.getShake();
@@ -2700,11 +2720,17 @@
     }
 
     /** Re-skin the battle background (chapter themes). */
-    function setPalette(palette) {
+    function setPalette(palette, zoneName) {
       if (!palette) return null;
       Object.keys(palette).forEach(function (key) {
         if (typeof palette[key] === 'string') ZONE.palette[key] = palette[key];
       });
+      // The 3D world rebuilds itself per region; the cached 2D backdrop is
+      // only needed by the fallback renderer.
+      if (ctx.use3d && root.MytharaRender3D) {
+        root.MytharaRender3D.setPalette(palette, zoneName || ZONE.name);
+        return ZONE.palette;
+      }
       ctx.background = buildBackground();   // rebuild immediately (once per stage)
       return ZONE.palette;
     }
@@ -3249,6 +3275,12 @@
       c.ellipse(w / 2, h - 50, 92, 24, 0, 0, Math.PI * 2);
       c.stroke();
 
+      // 3D hero turntable (idle + a swing every few seconds)
+      if (root.MytharaRender3D && root.MytharaRender3D.isReady()
+        && root.MytharaRender3D.drawPreviewHero(c, ui.previewCanvas, cls, time)) {
+        return;
+      }
+
       // idle, with a swing every few seconds
       const cycle = time % 3.2;
       const attackAnim = cycle < 0.55 ? 1 - cycle / 0.55 : 0;
@@ -3622,7 +3654,7 @@
         base.rock = Utils.shade(base.mountainNear, 0.18);
         base.path = Utils.shade(base.groundBottom, 0.3);
       }
-      Renderer.setPalette(base);
+      Renderer.setPalette(base, zoneName);
       if (zoneName) HUD.setZone(zoneName);
       void doc;
       return base;
@@ -3753,6 +3785,7 @@
       if (!isFinite(deltaMs) || deltaMs < 0) deltaMs = 0;
       deltaMs = Math.min(deltaMs, CONFIG.loop.maxDeltaMs);
 
+      state.lastDeltaSeconds = deltaMs / 1000;
       tick(deltaMs / 1000);
       state.rafId = root.requestAnimationFrame ? root.requestAnimationFrame(loop) : 0;
     }

@@ -7,6 +7,7 @@
   <meta name="description" content="Mythara Online — a browser fantasy MMORPG. Choose from 10 classes and adventure." />
   <title>Mythara Online</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style-mmorph.css" />
 </head>
 <body class="theme-verdant">
 
@@ -16,18 +17,35 @@
        ============================================================ -->
   <section class="screen screen--loading" id="screen-loading" aria-label="Loading">
     <div class="loading-bg" aria-hidden="true">
+      <canvas class="loading-bg__art" id="loading-art" width="1280" height="720"></canvas>
       <span class="loading-orb loading-orb--a"></span>
       <span class="loading-orb loading-orb--b"></span>
       <span class="loading-orb loading-orb--c"></span>
       <span class="loading-runes"></span>
+      <span class="loading-veil"></span>
     </div>
+
     <div class="loading-panel">
-      <h1 class="game-title game-title--loading">Mythara <span class="game-title__accent">Online</span></h1>
-      <p class="loading-sub">A fantasy RPG of ten heroes and fifty trials</p>
-      <div class="loading-bar"><div class="loading-bar__fill" id="loading-fill"></div></div>
-      <p class="loading-text" id="loading-text">Loading Mythara&hellip;</p>
-      <p class="loading-tip" id="loading-tip">Tip: every class can clear the story — pick the one you enjoy.</p>
-      <p class="loading-version" id="loading-version">v0.3.0</p>
+      <div class="loading-logo">
+        <span class="loading-logo__wing loading-logo__wing--left" aria-hidden="true"></span>
+        <h1 class="game-title game-title--loading">Mythara <span class="game-title__accent">Online</span></h1>
+        <span class="loading-logo__wing loading-logo__wing--right" aria-hidden="true"></span>
+      </div>
+      <p class="loading-sub">A fantasy MMORPG of ten heroes and fifty trials</p>
+
+      <div class="loading-wheel" aria-hidden="true">
+        <span class="loading-wheel__ring loading-wheel__ring--outer"></span>
+        <span class="loading-wheel__ring loading-wheel__ring--inner"></span>
+        <span class="loading-wheel__rune">&#10022;</span>
+        <span class="loading-percent" id="loading-percent">0%</span>
+      </div>
+
+      <div class="loading-bar" role="progressbar" aria-label="Loading progress" aria-valuemin="0" aria-valuemax="100">
+        <div class="loading-bar__fill" id="loading-fill"></div>
+      </div>
+      <p class="loading-text" id="loading-text">Loading Mythara Online&hellip;</p>
+      <p class="loading-tip" id="loading-tip">Tip: every class can clear the story &mdash; pick the one you enjoy.</p>
+      <p class="loading-version" id="loading-version">v0.5.0-3d</p>
     </div>
   </section>
 
@@ -175,10 +193,22 @@
         </div>
 
         <div class="hud__right">
-          <div class="hud__gold" title="Gold">
-            <span class="hud__gold-icon" aria-hidden="true">&#9670;</span>
-            <span class="hud__gold-value" id="gold-value">0</span>
-            <span class="hud__gold-label">gold</span>
+          <div class="hud__wallet">
+            <div class="hud__coin" title="Gold">
+              <span class="hud__coin-icon hud__coin-icon--gold" aria-hidden="true">&#9670;</span>
+              <span class="hud__coin-value" id="gold-value">0</span>
+              <span class="hud__coin-label">gold</span>
+            </div>
+            <div class="hud__coin" title="Gems (premium)">
+              <span class="hud__coin-icon hud__coin-icon--gem" aria-hidden="true">&#9672;</span>
+              <span class="hud__coin-value" id="gems-value">0</span>
+              <span class="hud__coin-label">gems</span>
+            </div>
+            <div class="hud__coin" title="Healing potions">
+              <span class="hud__coin-icon hud__coin-icon--potion" aria-hidden="true">&#9878;</span>
+              <span class="hud__coin-value" id="hud-potions">0</span>
+              <span class="hud__coin-label">potions</span>
+            </div>
           </div>
           <div class="hud__gear" id="player-gear">Iron Longsword &middot; Guard Plate</div>
         </div>
@@ -202,6 +232,22 @@
           <ul class="status-chips" id="target-status"></ul>
         </div>
 
+        <aside class="minimap" id="minimap" aria-label="Region map">
+          <div class="minimap__frame">
+            <canvas id="minimap-canvas" width="164" height="164" aria-label="Minimap"></canvas>
+            <span class="minimap__north" aria-hidden="true">N</span>
+          </div>
+          <p class="minimap__zone" id="minimap-zone">Verdant Hollow</p>
+        </aside>
+
+        <aside class="quest-tracker" id="quest-tracker" aria-label="Quest tracker">
+          <header class="quest-tracker__head">
+            <span class="quest-tracker__title">Quests</span>
+            <span class="quest-tracker__objective" id="hud-objective"></span>
+          </header>
+          <div class="quest-tracker__body" id="quest-tracker-body"></div>
+        </aside>
+
         <div class="stage__banner" id="banner" hidden aria-live="polite"></div>
 
         <!-- Touch / mobile controls -->
@@ -218,7 +264,13 @@
 
       <!-- ================= FOOTER: LOG + ACTIONS ================= -->
       <footer class="game-footer">
-        <ul class="combat-log" id="combat-log" aria-live="polite" aria-label="Combat log"></ul>
+        <section class="chat-frame" aria-label="Combat log">
+          <header class="chat-frame__head">
+            <span class="chat-frame__tab chat-frame__tab--active">Combat</span>
+            <span class="chat-frame__tab">System</span>
+          </header>
+          <ul class="combat-log" id="combat-log" aria-live="polite" aria-label="Combat log"></ul>
+        </section>
 
         <div class="actions">
           <div class="skill-bar" id="skill-bar" aria-label="Skills"></div>
@@ -255,5 +307,18 @@
   <script src="js/battle.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/app.js"></script>
+
+  <!-- ============================================================
+       MMORPG presentation layer — original software-3D renderer:
+       sky, terrain, props, weather, day/night, character & creature
+       rigs, combat VFX, minimap and the class preview.
+       Loaded last: it decorates the engine, never replaces it.
+       ============================================================ -->
+  <script src="js/render3d-core.js"></script>
+  <script src="js/render3d-shapes.js"></script>
+  <script src="js/render3d-world.js"></script>
+  <script src="js/render3d-actors.js"></script>
+  <script src="js/render3d-vfx.js"></script>
+  <script src="js/render3d.js"></script>
 </body>
 </html>

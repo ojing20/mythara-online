@@ -1,0 +1,18 @@
+{
+  "name": "mythara-online-tools",
+  "private": true,
+  "version": "0.5.0",
+  "description": "Development-only headless render harnesses for Mythara Online. The game itself has no dependencies and no build step.",
+  "scripts": {
+    "check": "node render-check.js shots --scene=battle --stage=c1-1 --frames=40 --combat",
+    "chapters": "node render-suite.js shots/suite --what=chapters",
+    "bosses": "node render-suite.js shots/suite --what=bosses",
+    "classes": "node render-suite.js shots/suite --what=classes",
+    "combat": "node render-suite.js shots/suite --what=combat",
+    "perf": "node render-perf.js"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.10",
+    "jsdom": "^30.1.1"
+  }
+}

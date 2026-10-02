@@ -453,7 +453,7 @@
       armorId: 'guardPlate',
       skillIds: ['shieldBash', 'ironGuard', 'whirlwind'],
       passive: { id: 'sturdy', name: 'Sturdy', description: 'Takes 15% less damage from all sources.', mods: { damageReduction: 0.15 } },
-      look: { skin: '#f2c79c', hair: '#7a4a22', primary: '#3f5ecf', secondary: '#5c7ae8', cloth: '#2b3a7a', accent: '#c9d4ea', metal: '#b9c2d6', weapon: 'sword-shield', cape: true, shield: true }
+      look: { skin: '#f2c79c', hair: '#7a4a22', primary: '#3f5ecf', secondary: '#5c7ae8', cloth: '#2b3a7a', accent: '#c9d4ea', metal: '#b9c2d6', weapon: 'sword-shield', cape: true, shield: true, helm: true }
     },
 
     archer: {
@@ -590,7 +590,7 @@
       armorId: 'warshideHarness',
       skillIds: ['cleave', 'bloodRage', 'recklessCharge'],
       passive: { id: 'rage', name: 'Rage', description: 'Builds rage as you deal and take damage, up to +25% attack.', mods: { rage: true } },
-      look: { skin: '#e8b183', hair: '#c2451f', primary: '#8d4a2a', secondary: '#b8643a', cloth: '#5f2f18', accent: '#d9a05a', metal: '#9aa0ae', weapon: 'greataxe', bareArms: true, cape: false }
+      look: { skin: '#e8b183', hair: '#c2451f', primary: '#8d4a2a', secondary: '#b8643a', cloth: '#5f2f18', accent: '#d9a05a', metal: '#9aa0ae', weapon: 'greataxe', bareArms: true, cape: false, helm: true, horns: true }
     },
 
     ninja: {
