@@ -329,6 +329,44 @@ async function createHarness(o) {
   function setTime(t) { Render3D.setTimeOfDay(t); }
   function setQuality(q) { Render3D.setQuality(q); }
 
+  /**
+   * Coarse pixel signature of the game canvas (12x7 luminance grid).
+   * Two frames of the same pose match; different poses/screens differ — used
+   * to prove animation states actually render differently.
+   */
+  function signature() {
+    const canvas = doc.getElementById('game-canvas');
+    if (!canvas) return null;
+    const entry = canvasFor(canvas);
+    const { width: w, height: h } = entry.canvas;
+    const data = entry.ctx.getImageData(0, 0, w, h).data;
+    const cols = 12, rows = 7, out = [];
+    for (let gy = 0; gy < rows; gy++) {
+      for (let gx = 0; gx < cols; gx++) {
+        let sum = 0, n = 0;
+        const x0 = Math.floor((gx / cols) * w), x1 = Math.floor(((gx + 1) / cols) * w);
+        const y0 = Math.floor((gy / rows) * h), y1 = Math.floor(((gy + 1) / rows) * h);
+        for (let y = y0; y < y1; y += 3) {
+          for (let x = x0; x < x1; x += 3) {
+            const i = (y * w + x) * 4;
+            sum += (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+            n++;
+          }
+        }
+        out.push(n ? sum / n : 0);
+      }
+    }
+    return out;
+  }
+
+  /** Mean absolute difference between two signatures (0 = identical). */
+  function signatureDelta(a, b) {
+    if (!a || !b || a.length !== b.length) return Infinity;
+    let total = 0;
+    for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+    return total / a.length;
+  }
+
   function shot(target) {
     const file = path.resolve(target);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -379,7 +417,7 @@ async function createHarness(o) {
     wait, pump, step, resize, sizeCanvas, dismissModal, key, attack, move,
     signIn, createHero, unlockThrough, enterScene, setTime, setQuality,
     approach, nearestMonster,
-    shot, shotElement, stats, profile, resetProfile, summary,
+    shot, shotElement, stats, profile, resetProfile, summary, signature, signatureDelta,
     close() { try { dom.window.close(); } catch (e) { /* jsdom already gone */ } }
   };
 }
