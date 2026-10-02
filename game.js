@@ -31,6 +31,13 @@
   const MONSTER_DEF = DATA.MONSTERS[DATA.activeMonster];
   const WORLD = CONFIG.world;
 
+  /** How enemy stats grow with stage level (see data-enemies.js for bases). */
+  const ENEMY_SCALING = {
+    mob: { hp: 9, attack: 1.6, defense: 0.35 },
+    elite: { hp: 26, attack: 2.2, defense: 0.6 },
+    boss: { hp: 70, attack: 2.4, defense: 1.0 }
+  };
+
   /* ============================================================
    * 1. UTILS
    * ========================================================== */
@@ -82,8 +89,19 @@
     function setRng(fn) { rng = typeof fn === 'function' ? fn : Math.random; }
     function resetRng() { rng = Math.random; }
 
+    /** Blend a hex colour toward white (amount > 0) or black (amount < 0). */
+    function shade(hex, amount) {
+      const parsed = hexToRgb(hex);
+      const target = amount >= 0 ? 255 : 0;
+      const t = Math.abs(Utils.clamp(amount, -1, 1));
+      const mix = function (channel) { return Math.round(channel + (target - channel) * t); };
+      const toHex = function (value) { return ('0' + mix(value).toString(16)).slice(-2); };
+      return '#' + toHex(parsed.r) + toHex(parsed.g) + toHex(parsed.b);
+    }
+
     return {
-      clamp: clamp, random: random, randRange: randRange, randInt: randInt, pick: pick,
+      clamp: clamp,
+      shade: shade, random: random, randRange: randRange, randInt: randInt, pick: pick,
       distance: distance, rgba: rgba, seededRandom: seededRandom,
       setRng: setRng, resetRng: resetRng
     };
@@ -497,14 +515,17 @@
           continue;
         }
 
-        const targets = ctx.monsters() || [];
+        const targets = (p.payload && p.payload.hostile)
+          ? (ctx.players ? ctx.players() : [])
+          : (ctx.monsters() || []);
         for (let m = 0; m < targets.length; m++) {
-          const monster = targets[m];
-          if (!monster.alive || p.hit.indexOf(monster) !== -1) continue;
-          const reach = p.radius + monster.radius;
-          if (Utils.distance(p.x, p.y, monster.pos.x, monster.pos.y) <= reach) {
-            ctx.onHit(p, monster);
-            p.hit.push(monster);
+          const target = targets[m];
+          if (!target || (target.alive === false) || p.hit.indexOf(target) !== -1) continue;
+          const reach = p.radius + (target.radius || 14);
+          if (Utils.distance(p.x, p.y, target.pos.x, target.pos.y) <= reach) {
+            if (p.payload && p.payload.hostile) { if (ctx.onHitPlayer) ctx.onHitPlayer(p, target); }
+            else { ctx.onHit(p, target); }
+            p.hit.push(target);
             if (!p.payload.pierce) { list.splice(i, 1); }
             break;
           }
@@ -665,7 +686,12 @@
       const bonus = DATA.gearBonus(cls);
       const mods = Skills.aggregateMods(player);
       const lv = Math.max(0, player.level - 1);
-      const num = function (key) { return (base[key] || 0) + (growth[key] || 0) * lv + (bonus[key] || 0); };
+      // gear from the account's equipment screen (set by the battle/app layer)
+      const equipped = player.equipmentBonus || {};
+      const flat = player.flatBonus || {};
+      const num = function (key) {
+        return (base[key] || 0) + (growth[key] || 0) * lv + (bonus[key] || 0) + (equipped[key] || 0) + (flat[key] || 0);
+      };
 
       const prevMaxHp = player.maxHp || 1;
       const hpRatio = player.hp !== undefined ? Utils.clamp(player.hp / prevMaxHp, 0, 1) : 1;
@@ -679,7 +705,8 @@
 
       player.critChance = Utils.clamp((base.critChance || 0) + (bonus.critChance || 0) + (mods.critChance || 0), 0, 0.95);
       player.critMultiplier = (base.critMultiplier || 1.6) + (mods.critDamage || 0);
-      player.evasion = Utils.clamp((base.evasion || 0) + (bonus.evasion || 0) + (mods.evasion || 0), 0, 0.75);
+      player.evasion = Utils.clamp((base.evasion || 0) + (bonus.evasion || 0) + (equipped.evasion || 0) + (mods.evasion || 0), 0, 0.75);
+      player.gearBonus = equipped;
       player.damageReduction = Utils.clamp(mods.damageReduction || 0, -0.5, 0.85);
 
       player.attackCooldownMs = Math.max(180, (base.attackCooldownMs || 600) * (1 - Utils.clamp(bonus.attackSpeed || 0, 0, 0.5)));
@@ -700,6 +727,57 @@
     }
 
     return { recompute: recompute };
+  })();
+
+  /* ============================================================
+   * 3f. ANIM — actor animation states
+   *    idle | walk | run | attack | skill | ultimate | hurt | death
+   *    One-shot states return to idle/walk when they finish; `death`
+   *    is terminal until the actor is revived.
+   * ========================================================== */
+  const Anim = (function () {
+    const ONE_SHOT = {
+      attack: 420, skill: 720, ultimate: 1500, hurt: 340, death: 1100
+    };
+    const TERMINAL = { death: true };
+
+    function set(actor, state, options) {
+      if (!actor) return;
+      const opts = options || {};
+      const duration = opts.durationMs !== undefined ? opts.durationMs : (ONE_SHOT[state] || 0);
+      if (!actor.anim) actor.anim = { state: 'idle', t: 0, durationMs: 0, progress: 0 };
+      if (actor.anim.state === state && state === 'idle') return;
+      actor.anim.state = state;
+      actor.anim.t = 0;
+      actor.anim.durationMs = duration;
+      actor.anim.progress = 0;
+      actor.anim.terminal = !!TERMINAL[state];
+    }
+
+    function update(actor, dt, fallback) {
+      if (!actor || !actor.anim) return actor && actor.anim;
+      const anim = actor.anim;
+      anim.t += dt * 1000;
+      if (anim.durationMs > 0) {
+        anim.progress = Utils.clamp(anim.t / anim.durationMs, 0, 1);
+        if (anim.t >= anim.durationMs && !anim.terminal) {
+          set(actor, fallback || 'idle');
+        }
+      } else {
+        anim.progress = 0;
+      }
+      return anim;
+    }
+
+    function is(actor, state) { return !!(actor && actor.anim && actor.anim.state === state); }
+    function current(actor) { return (actor && actor.anim && actor.anim.state) || 'idle'; }
+    function progress(actor) { return (actor && actor.anim && actor.anim.progress) || 0; }
+    function isBusy(actor) {
+      const state = current(actor);
+      return state === 'attack' || state === 'skill' || state === 'ultimate' || state === 'hurt';
+    }
+
+    return { set: set, update: update, is: is, current: current, progress: progress, isBusy: isBusy, ONE_SHOT: ONE_SHOT };
   })();
 
   /* ============================================================
@@ -734,7 +812,8 @@
 
       pos: { x: PLAYER_DEF.spawn.x, y: PLAYER_DEF.spawn.y },
       facing: { x: PLAYER_DEF.facing.x, y: PLAYER_DEF.facing.y },
-      moving: false, walkPhase: 0, radius: PLAYER_DEF.radius,
+      moving: false, running: false, walkPhase: 0, radius: PLAYER_DEF.radius,
+      anim: { state: 'idle', t: 0, durationMs: 0, progress: 0 },
 
       attackCooldown: 0, attackAnim: 0, attackKind: 'melee', hitFlash: 0, hurtTimer: 0,
       downed: false, respawnTimer: 0, kills: 0
@@ -745,6 +824,70 @@
     player.hp = player.maxHp;
     player.mp = player.maxMp;
     return player;
+  }
+
+  /**
+   * Build a battle enemy from a data-enemies.js record.
+   * `level` drives the linear stat scaling used across all 50 stages.
+   */
+  function createEnemy(enemyDef, level, options) {
+    const opts = options || {};
+    const def = enemyDef || {};
+    const base = def.base || { maxHp: 40, attack: 6, defense: 1, speed: 60, xp: 10, coins: 5 };
+    const tier = ENEMY_SCALING[def.tier] || ENEMY_SCALING.mob;
+    const lv = Math.max(1, Math.round(level || 1));
+    const steps = lv - 1;
+
+    const maxHp = Math.round(base.maxHp + tier.hp * steps);
+    const attack = Math.round(base.attack + tier.attack * steps);
+    const defense = Math.round(base.defense + tier.defense * steps);
+    const spawn = opts.spawn || { x: 620, y: 360 };
+
+    return {
+      kind: 'monster',
+      def: def,
+      enemyId: def.id,
+      name: def.name,
+      body: def.body || 'humanoid',
+      level: lv,
+      tier: def.tier || 'mob',
+      isBoss: !!def.boss || def.tier === 'boss',
+      hp: maxHp,
+      maxHp: maxHp,
+      attack: attack,
+      defense: defense,
+      speed: base.speed || 70,
+      radius: Math.round((def.size || 1) * 17),
+      scale: def.size || 1,
+      xp: Math.round((base.xp || 10) * (1 + 0.5 * steps)),
+      coins: Math.round((base.coins || 5) * (1 + 0.45 * steps)),
+      palette: def.palette || {},
+      abilities: (def.abilities || []).map(function (ability) { return Object.assign({ timerMs: 1200 + Math.random() * 1800 }, ability); }),
+      phases: (def.phases || []).slice(),
+      phaseIndex: 0,
+      enrage: 0,
+      telegraphMs: 0,
+      telegraph: null,
+      boss: !!opts.boss || !!def.boss || def.tier === 'boss',
+
+      pos: { x: spawn.x, y: spawn.y },
+      home: { x: spawn.x, y: spawn.y },
+      alive: true,
+      aggro: opts.aggro !== false,
+      wanderTarget: { x: spawn.x, y: spawn.y },
+      wanderTimer: Utils.randRange(0.4, 1.6),
+      attackCooldown: 0,
+      attackAnim: 0,
+      hitFlash: 0,
+      deathTimer: 0,
+      respawnTimer: 0,
+      spawnPulse: opts.noSpawnDelay ? 0 : 1,
+      bob: Utils.randRange(0, Math.PI * 2),
+      status: null,
+      anim: { state: 'idle', t: 0 },
+      facing: { x: -1, y: 0 },
+      rewardValue: opts.reward !== false
+    };
   }
 
   function createMonster(def, zone) {
@@ -787,7 +930,14 @@
     let shake = 0;
     let bannerTimer = 0;
 
+    /** Player settings (Settings screen) can silence feedback effects. */
+    function bodyHas(className) {
+      const body = root.document && root.document.body;
+      return !!(body && body.classList && body.classList.contains(className));
+    }
+
     function addFloater(x, y, text, options) {
+      if (bodyHas('no-damage')) return;
       const opts = options || {};
       floaters.push({
         x: x, y: y, text: String(text),
@@ -821,7 +971,10 @@
       if (particles.length > 260) particles.splice(0, particles.length - 260);
     }
 
-    function addShake(amount) { shake = Math.min(14, shake + amount); }
+    function addShake(amount) {
+      if (bodyHas('no-shake')) return;
+      shake = Math.min(14, shake + amount);
+    }
 
     function showBanner(text, durationMs) {
       bannerTimer = (durationMs || CONFIG.feedback.bannerDurationMs) / 1000;
@@ -1117,7 +1270,8 @@
       actors.sort(function (a, b) { return a.pos.y - b.pos.y; });
 
       actors.forEach(function (actor) {
-        if (actor.kind === 'monster') drawMonster(c, actor, state);
+        if (actor.kind === 'duelist') drawDuelist(c, actor, state);
+        else if (actor.kind === 'monster') drawMonster(c, actor, state);
         else drawPlayer(c, actor, state);
       });
 
@@ -1451,17 +1605,45 @@
       const look = o.look || {};
       const facing = o.facing === undefined ? 1 : (o.facing >= 0 ? 1 : -1);
       const attack = o.attackAnim || 0;
-      const walk = Math.sin((o.walkPhase || 0) * 2) * (o.moving ? 1.8 : 0);
-      const bob = o.moving ? walk : Math.sin((o.time || 0) * 2) * 0.9;
+
+      // animation state drives pose, offset and effects
+      const animState = o.animState || (attack > 0 ? 'attack' : (o.downed ? 'death' : (o.moving ? (o.running ? 'run' : 'walk') : 'idle')));
+      const animProgress = Utils.clamp(o.animProgress === undefined ? 0 : o.animProgress, 0, 1);
+      const speed = animState === 'run' ? 2.4 : 1.9;
+
+      let swing = 0;
+      if (animState === 'attack') swing = animProgress;
+      else swing = attack > 0 ? 1 - attack : 0;
+
+      const walk = Math.sin((o.walkPhase || 0) * 2 * speed) * (o.moving ? (animState === 'run' ? 2.8 : 1.8) : 0);
+      let bob = o.moving ? walk : Math.sin((o.time || 0) * 2) * 0.9;
+      let offsetX = 0;
+      let extraRotation = 0;
+
+      if (animState === 'run') extraRotation = -facing * 0.1;
+      if (animState === 'hurt') {
+        offsetX = -facing * 4 * (1 - animProgress);
+        extraRotation = -facing * 0.16 * (1 - animProgress);
+      }
+      if (animState === 'ultimate') {
+        bob = -6 - Math.sin(animProgress * Math.PI) * 3;
+      }
+      if (animState === 'skill') {
+        bob = -2 - Math.sin(animProgress * Math.PI) * 2;
+      }
 
       c.save();
       c.translate(o.x || 0, o.y || 0);
       if (o.scale && o.scale !== 1) c.scale(o.scale, o.scale);
       if (o.alpha !== undefined) c.globalAlpha = o.alpha;
 
-      if (o.downed) {
-        c.rotate(Math.PI / 2.4);
-        c.globalAlpha = (o.alpha === undefined ? 1 : o.alpha) * 0.75;
+      // death: fall over and fade
+      if (animState === 'death' || o.downed) {
+        const fall = animState === 'death' ? Utils.clamp(animProgress * 1.6, 0, 1) : 1;
+        c.rotate((Math.PI / 2.4) * fall);
+        c.globalAlpha = (o.alpha === undefined ? 1 : o.alpha) * (1 - fall * 0.35);
+      } else if (extraRotation) {
+        c.rotate(extraRotation);
       }
 
       // shadow
@@ -1470,7 +1652,39 @@
       c.ellipse(0, 0, 17, 6, 0, 0, Math.PI * 2);
       c.fill();
 
-      c.translate(0, bob);
+      c.translate(offsetX, bob);
+
+      // ultimate / skill energy
+      if (animState === 'ultimate' || animState === 'skill') {
+        const pulse = animState === 'ultimate' ? 1 - animProgress * 0.4 : 0.6;
+        const radius = (animState === 'ultimate' ? 30 + animProgress * 34 : 24) * (o.scale || 1);
+        c.save();
+        c.globalAlpha = 0.35 * pulse;
+        c.strokeStyle = look.accent || '#f2c14e';
+        c.lineWidth = 3;
+        c.beginPath();
+        c.arc(0, -6, radius, 0, Math.PI * 2);
+        c.stroke();
+        c.globalAlpha = 0.2 * pulse;
+        c.fillStyle = look.aura || look.accent || '#f2c14e';
+        c.beginPath();
+        c.arc(0, -6, radius * 0.8, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+
+      // run dust puffs
+      if (animState === 'run') {
+        c.save();
+        c.globalAlpha = 0.25;
+        c.fillStyle = '#ffffff';
+        [-8, -2, 6].forEach(function (dx, i) {
+          c.beginPath();
+          c.ellipse(dx, 8 + Math.sin((o.walkPhase || 0) * 6 + i) * 1.5, 4, 2, 0, 0, Math.PI * 2);
+          c.fill();
+        });
+        c.restore();
+      }
 
       // magic aura: a soft glow that sits behind the body, never over the face
       if (look.aura) {
@@ -1494,7 +1708,17 @@
 
       drawBody(c, look);
       drawHead(c, look, facing);
-      drawWeapon(c, look, facing, attack, o.attackKind);
+      drawWeapon(c, look, facing, animState === 'attack' ? (1 - swing) : attack,
+        animState === 'ultimate' || animState === 'skill' ? 'cast' : o.attackKind);
+
+      // hurt tint
+      if (animState === 'hurt') {
+        c.globalAlpha = 0.45 * (1 - animProgress);
+        c.fillStyle = '#ff5f6d';
+        c.beginPath();
+        c.arc(0, -14, 16, 0, Math.PI * 2);
+        c.fill();
+      }
 
       c.restore();
     }
@@ -1554,6 +1778,53 @@
       drawNameTag(c, p.x, p.y - 52, player.name, 'Lv. ' + player.level + ' ' + player.title, '#ffe9a8');
       drawMiniBar(c, p.x, p.y - 34, 46, 5, player.hp / player.maxHp, '#ff5f6d', '#3a0d12');
     }
+
+    /** Arena opponents: player-style heroes driven by the bot AI. */
+    function drawDuelist(c, duelist, state) {
+      if (!duelist.alive) { drawCreature(c, duelist, state); return; }
+      const p = duelist.pos;
+
+      if (duelist.telegraphMs > 0) {
+        c.save();
+        c.globalAlpha = 0.35;
+        c.strokeStyle = '#ff6b4a';
+        c.lineWidth = 3;
+        c.beginPath();
+        c.ellipse(p.x, p.y, 34, 15, 0, 0, Math.PI * 2);
+        c.stroke();
+        c.restore();
+      }
+
+      drawHero(c, {
+        look: duelist.look,
+        x: p.x,
+        y: p.y,
+        facing: duelist.facing && duelist.facing.x < 0 ? -1 : 1,
+        walkPhase: duelist.walkPhase || 0,
+        moving: duelist.moving,
+        running: true,
+        animState: duelist.anim ? duelist.anim.state : 'idle',
+        animProgress: duelist.anim ? duelist.anim.progress : 0,
+        attackAnim: duelist.attackAnim || 0,
+        attackKind: duelist.attackType === 'ranged' ? 'cast' : 'melee',
+        time: state.time
+      });
+
+      if (duelist.hitFlash > 0) {
+        c.save();
+        c.globalAlpha = MathUtilsClamp(duelist.hitFlash, 0, 1) * 0.5;
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.arc(p.x, p.y - 8, duelist.radius + 7, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+
+      drawNameTag(c, p.x, p.y - 52, duelist.name, 'Lv. ' + duelist.level + ' ' + duelist.title, '#ff9aa2');
+      drawMiniBar(c, p.x, p.y - 34, 46, 5, duelist.hp / duelist.maxHp, '#ff5f6d', '#3a0d12');
+    }
+
+    function MathUtilsClamp(value, min, max) { return Utils.clamp(value, min, max); }
 
     function drawProjectiles(c) {
       c.save();
@@ -1617,6 +1888,7 @@
     }
 
     function drawMonster(c, monster, state) {
+      if (monster.enemyId || !monster.def || !monster.def.palette) { drawCreature(c, monster, state); return; }
       const def = monster.def;
       const pal = def.palette;
 
@@ -1774,6 +2046,592 @@
       }
     }
 
+    /* ---------- data-driven enemy art (js/data-enemies.js) ---------- */
+    /** Rounded body helper used by most creature types. */
+    function blob(c, x, y, rx, ry, fill, outline) {
+      c.fillStyle = fill;
+      c.beginPath();
+      c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      c.fill();
+      if (outline) {
+        c.strokeStyle = outline;
+        c.lineWidth = 1.4;
+        c.stroke();
+      }
+    }
+
+    function glowEyes(c, x, y, spacing, size, color) {
+      c.fillStyle = color;
+      c.beginPath(); c.arc(x - spacing, y, size, 0, Math.PI * 2); c.fill();
+      c.beginPath(); c.arc(x + spacing, y, size, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = 0.4;
+      c.beginPath(); c.arc(x - spacing, y, size * 2.2, 0, Math.PI * 2); c.fill();
+      c.beginPath(); c.arc(x + spacing, y, size * 2.2, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = 1;
+    }
+
+    function drawWings(c, pal, scale, flap) {
+      c.fillStyle = Utils.rgba(pal.dark || '#1a1428', 0.92);
+      [-1, 1].forEach(function (dir) {
+        c.save();
+        c.scale(dir, 1);
+        c.rotate(-0.35 + flap * 0.5);
+        c.beginPath();
+        c.moveTo(4 * scale, -6 * scale);
+        c.quadraticCurveTo(34 * scale, -30 * scale, 40 * scale, -2 * scale);
+        c.quadraticCurveTo(26 * scale, 2 * scale, 4 * scale, 4 * scale);
+        c.closePath();
+        c.fill();
+        c.restore();
+      });
+    }
+
+    function drawHorns(c, pal, scale) {
+      c.fillStyle = pal.accent || '#e8d9a0';
+      [-1, 1].forEach(function (dir) {
+        c.beginPath();
+        c.moveTo(dir * 4 * scale, -16 * scale);
+        c.quadraticCurveTo(dir * 13 * scale, -26 * scale, dir * 8 * scale, -30 * scale);
+        c.quadraticCurveTo(dir * 8 * scale, -22 * scale, dir * 2 * scale, -15 * scale);
+        c.closePath();
+        c.fill();
+      });
+    }
+
+    /** Draws the creature body for a `body` type, facing right by default. */
+    function drawCreatureShape(c, monster, time) {
+      const pal = monster.palette || {};
+      const primary = pal.primary || '#7a9a6a';
+      const secondary = pal.secondary || primary;
+      const dark = pal.dark || '#2f3a2a';
+      const accent = pal.accent || '#f2c14e';
+      const eye = pal.eye || '#ffe27a';
+      const def = monster.def || {};
+      const scale = monster.scale || 1;
+      const attack = monster.attackAnim || 0;
+      const lunge = attack > 0 ? Math.sin((1 - attack) * Math.PI) * 3 : 0;
+      const body = monster.body || 'humanoid';
+
+      c.save();
+      c.translate(lunge, 0);
+
+      if (body === 'blob') {
+        const squash = Math.sin(time * 4 + monster.bob) * 0.06;
+        const w = 20 * scale * (1 + squash);
+        const h = 15 * scale * (1 - squash);
+        blob(c, 0, -h * 0.9, w, h, primary, dark);
+        blob(c, 0, -h * 0.6, w * 0.9, h * 0.55, secondary);
+        c.fillStyle = Utils.rgba(pal.shine || '#ffffff', 0.5);
+        blob(c, -w * 0.35, -h * 1.4, w * 0.22, h * 0.16, Utils.rgba('#ffffff', 0.5));
+        glowEyes(c, 0, -h * 1.1, 5 * scale, 2.2 * scale, eye);
+      }
+
+      else if (body === 'humanoid') {
+        const robe = def.robe;
+        // legs
+        c.fillStyle = dark;
+        if (!robe) {
+          c.fillRect(-6 * scale, -6 * scale, 5 * scale, 12 * scale);
+          c.fillRect(1 * scale, -6 * scale, 5 * scale, 12 * scale);
+        }
+        // torso
+        c.fillStyle = primary;
+        c.beginPath();
+        c.moveTo(-10 * scale, 6 * scale);
+        c.quadraticCurveTo(-12 * scale, -8 * scale, 0, -11 * scale);
+        c.quadraticCurveTo(12 * scale, -8 * scale, 10 * scale, 6 * scale);
+        if (robe) c.quadraticCurveTo(0, 16 * scale, -10 * scale, 6 * scale);
+        c.closePath();
+        c.fill();
+        c.fillStyle = secondary;
+        c.beginPath();
+        c.moveTo(-6 * scale, 4 * scale);
+        c.quadraticCurveTo(-8 * scale, -6 * scale, 0, -9 * scale);
+        c.quadraticCurveTo(8 * scale, -6 * scale, 6 * scale, 4 * scale);
+        c.closePath();
+        c.fill();
+        // arms
+        c.fillStyle = secondary;
+        c.beginPath(); c.ellipse(-11 * scale, -2 * scale, 3 * scale, 6 * scale, 0.3, 0, Math.PI * 2); c.fill();
+        c.beginPath(); c.ellipse(11 * scale, -2 * scale, 3 * scale, 6 * scale, -0.3, 0, Math.PI * 2); c.fill();
+        // head
+        blob(c, 0, -17 * scale, 8 * scale, 8 * scale, primary);
+        c.fillStyle = dark;
+        c.beginPath();
+        c.arc(0, -19 * scale, 8.2 * scale, Math.PI * 1.05, Math.PI * 2);
+        c.fill();
+        glowEyes(c, 0, -16 * scale, 3.4 * scale, 1.6 * scale, eye);
+        if (def.horns) drawHorns(c, pal, scale);
+        if (def.crown) {
+          c.fillStyle = accent;
+          c.beginPath();
+          c.moveTo(-8 * scale, -25 * scale);
+          c.lineTo(-5 * scale, -31 * scale);
+          c.lineTo(-2 * scale, -25 * scale);
+          c.lineTo(1 * scale, -32 * scale);
+          c.lineTo(4 * scale, -25 * scale);
+          c.lineTo(7 * scale, -31 * scale);
+          c.lineTo(8 * scale, -24 * scale);
+          c.closePath();
+          c.fill();
+        }
+        // weapon
+        const weapon = def.weapon;
+        if (weapon) {
+          c.save();
+          c.translate(12 * scale, -6 * scale);
+          c.rotate(attack > 0 ? (-1.9 + (1 - attack) * 2.7) : 0.55);
+          if (weapon === 'club' || weapon === 'greatclub') {
+            c.fillStyle = '#6b4a2a';
+            c.fillRect(-2 * scale, -18 * scale, 4 * scale, 22 * scale);
+            blob(c, 0, -22 * scale, 6 * scale, 7 * scale, dark, accent);
+          } else if (weapon === 'axe') {
+            c.fillStyle = '#6b4a2a'; c.fillRect(-2 * scale, -16 * scale, 4 * scale, 24 * scale);
+            c.fillStyle = '#b9c2d6';
+            c.beginPath();
+            c.moveTo(0, -18 * scale); c.quadraticCurveTo(11 * scale, -14 * scale, 9 * scale, -2 * scale);
+            c.quadraticCurveTo(4 * scale, -7 * scale, 0, -6 * scale); c.closePath(); c.fill();
+          } else if (weapon === 'greataxe') {
+            c.fillStyle = '#5a3d24'; c.fillRect(-2.5 * scale, -22 * scale, 5 * scale, 34 * scale);
+            c.fillStyle = '#b9c2d6';
+            c.beginPath();
+            c.moveTo(0, -24 * scale); c.quadraticCurveTo(16 * scale, -18 * scale, 13 * scale, 0);
+            c.quadraticCurveTo(6 * scale, -6 * scale, 0, -5 * scale); c.closePath(); c.fill();
+          } else if (weapon === 'staff') {
+            c.fillStyle = '#6b4a2a'; c.fillRect(-2 * scale, -20 * scale, 4 * scale, 30 * scale);
+            blob(c, 0, -23 * scale, 5 * scale, 5 * scale, accent);
+            c.globalAlpha = 0.5;
+            blob(c, 0, -23 * scale, 9 * scale, 9 * scale, Utils.rgba(accent, 0.4));
+            c.globalAlpha = 1;
+          } else if (weapon === 'daggers' || weapon === 'dual-blades') {
+            c.fillStyle = '#d7e0f2'; c.fillRect(-1.6 * scale, -16 * scale, 3.2 * scale, 16 * scale);
+          } else {
+            c.fillStyle = '#c9d4ea'; c.fillRect(-2 * scale, -22 * scale, 4 * scale, 26 * scale);
+            c.fillStyle = accent; c.fillRect(-4 * scale, -1 * scale, 8 * scale, 3 * scale);
+          }
+          c.restore();
+        }
+        if (def.wings) drawWings(c, pal, scale, Math.sin(time * 3 + monster.bob) * 0.4);
+      }
+
+      else if (body === 'beast') {
+        const walk = Math.sin(time * 6 + monster.bob) * 1.6;
+        // legs
+        c.strokeStyle = dark;
+        c.lineWidth = 3.4 * scale;
+        c.lineCap = 'round';
+        [[-10, 6], [-4, -6], [6, 6], [12, -6]].forEach(function (pair, i) {
+          const swing = i % 2 === 0 ? walk : -walk;
+          c.beginPath();
+          c.moveTo(pair[0] * scale, -4 * scale);
+          c.lineTo((pair[0] + swing) * scale, 12 * scale);
+          c.stroke();
+        });
+        // body
+        blob(c, 0, -8 * scale, 18 * scale, 10 * scale, primary, dark);
+        blob(c, 3 * scale, -11 * scale, 12 * scale, 6 * scale, secondary);
+        // tail
+        c.strokeStyle = primary;
+        c.lineWidth = 4 * scale;
+        c.beginPath();
+        c.moveTo(-16 * scale, -10 * scale);
+        c.quadraticCurveTo(-28 * scale, -16 * scale + Math.sin(time * 5) * 3 * scale, -32 * scale, -24 * scale);
+        c.stroke();
+        // head
+        c.save();
+        c.translate(16 * scale, -14 * scale);
+        c.rotate(attack > 0 ? -0.3 : 0);
+        blob(c, 0, 0, 9 * scale, 8 * scale, primary, dark);
+        c.fillStyle = dark;
+        c.beginPath();
+        c.moveTo(8 * scale, -2 * scale);
+        c.lineTo(16 * scale, 1 * scale);
+        c.lineTo(8 * scale, 4 * scale);
+        c.closePath();
+        c.fill();
+        glowEyes(c, 1 * scale, -2 * scale, 3.4 * scale, 1.5 * scale, eye);
+        if (def.horns) drawHorns(c, pal, scale * 0.8);
+        c.restore();
+      }
+
+      else if (body === 'arachnid') {
+        c.strokeStyle = dark;
+        c.lineWidth = 2.4 * scale;
+        c.lineCap = 'round';
+        for (let i = 0; i < 4; i++) {
+          const angle = -0.2 + i * 0.5;
+          [-1, 1].forEach(function (dir) {
+            const baseX = dir * 4 * scale;
+            const step = Math.sin(time * 5 + i + monster.bob) * 2 * scale;
+            c.beginPath();
+            c.moveTo(baseX, -6 * scale);
+            c.quadraticCurveTo((dir * 16) * scale, -14 * scale + step, (dir * 24) * scale, 6 * scale + step);
+            c.stroke();
+            void angle;
+          });
+        }
+        blob(c, 0, -9 * scale, 12 * scale, 10 * scale, primary, dark);
+        blob(c, -2 * scale, -12 * scale, 7 * scale, 6 * scale, secondary);
+        glowEyes(c, 5 * scale, -12 * scale, 2.6 * scale, 1.8 * scale, eye);
+        c.fillStyle = eye;
+        c.globalAlpha = 0.8;
+        blob(c, 8 * scale, -4 * scale, 2.4 * scale, 1.8 * scale, eye);
+        c.globalAlpha = 1;
+      }
+
+      else if (body === 'treant') {
+        c.fillStyle = pal.accent || '#7a5230';
+        c.fillRect(-5 * scale, -6 * scale, 10 * scale, 18 * scale);
+        c.strokeStyle = pal.accent || '#7a5230';
+        c.lineWidth = 4 * scale;
+        c.lineCap = 'round';
+        [-1, 1].forEach(function (dir) {
+          c.beginPath();
+          c.moveTo(0, -4 * scale);
+          c.quadraticCurveTo(dir * 14 * scale, -10 * scale, dir * 20 * scale, 2 * scale);
+          c.stroke();
+        });
+        blob(c, 0, -16 * scale, 16 * scale, 13 * scale, primary, dark);
+        c.fillStyle = secondary;
+        c.beginPath();
+        c.arc(-8 * scale, -20 * scale, 8 * scale, 0, Math.PI * 2);
+        c.arc(8 * scale, -20 * scale, 8 * scale, 0, Math.PI * 2);
+        c.arc(0, -26 * scale, 9 * scale, 0, Math.PI * 2);
+        c.fill();
+        glowEyes(c, 0, -12 * scale, 4 * scale, 2 * scale, eye);
+        if (monster.tier === 'boss') {
+          c.strokeStyle = Utils.rgba(eye, 0.5);
+          c.lineWidth = 2;
+          c.beginPath();
+          c.arc(0, -16 * scale, 26 * scale + Math.sin(time * 2) * 2, 0, Math.PI * 2);
+          c.stroke();
+        }
+      }
+
+      else if (body === 'golem') {
+        // floating limbs
+        const float = Math.sin(time * 2 + monster.bob) * 2;
+        c.fillStyle = dark;
+        blob(c, -15 * scale, -6 * scale + float, 6 * scale, 7 * scale, dark);
+        blob(c, 15 * scale, -6 * scale - float, 6 * scale, 7 * scale, dark);
+        // torso chunks
+        c.fillStyle = primary;
+        c.beginPath();
+        c.moveTo(-13 * scale, 6 * scale);
+        c.lineTo(-10 * scale, -16 * scale);
+        c.lineTo(10 * scale, -16 * scale);
+        c.lineTo(13 * scale, 6 * scale);
+        c.closePath();
+        c.fill();
+        c.fillStyle = secondary;
+        c.fillRect(-9 * scale, -12 * scale, 18 * scale, 5 * scale);
+        // head
+        blob(c, 0, -22 * scale, 8 * scale, 7 * scale, primary, dark);
+        glowEyes(c, 0, -22 * scale, 3.4 * scale, 2.2 * scale, eye);
+        if (def.crown) {
+          c.fillStyle = accent;
+          c.fillRect(-8 * scale, -30 * scale, 16 * scale, 3 * scale);
+          [-6, 0, 6].forEach(function (dx) {
+            c.beginPath();
+            c.moveTo(dx * scale - 2 * scale, -30 * scale);
+            c.lineTo(dx * scale, -36 * scale);
+            c.lineTo(dx * scale + 2 * scale, -30 * scale);
+            c.closePath();
+            c.fill();
+          });
+        }
+      }
+
+      else if (body === 'bat') {
+        const flap = Math.sin(time * 12 + monster.bob);
+        drawWings(c, pal, scale * 1.1, flap);
+        blob(c, 0, -12 * scale, 9 * scale, 8 * scale, primary, dark);
+        c.fillStyle = dark;
+        [-1, 1].forEach(function (dir) {
+          c.beginPath();
+          c.moveTo(dir * 3 * scale, -18 * scale);
+          c.lineTo(dir * 7 * scale, -25 * scale);
+          c.lineTo(dir * 1 * scale, -19 * scale);
+          c.closePath();
+          c.fill();
+        });
+        glowEyes(c, 0, -13 * scale, 3.4 * scale, 1.7 * scale, eye);
+      }
+
+      else if (body === 'serpent') {
+        const flap = Math.sin(time * 3 + monster.bob);
+        if (def.wings) drawWings(c, pal, scale * 1.3, flap);
+        // coiling tail
+        c.strokeStyle = primary;
+        c.lineWidth = 9 * scale;
+        c.lineCap = 'round';
+        c.beginPath();
+        c.moveTo(-6 * scale, 4 * scale);
+        c.quadraticCurveTo(-24 * scale, 6 * scale, -28 * scale, -14 * scale + flap * 2);
+        c.stroke();
+        c.strokeStyle = secondary;
+        c.lineWidth = 5 * scale;
+        c.beginPath();
+        c.moveTo(-8 * scale, 2 * scale);
+        c.quadraticCurveTo(-22 * scale, 3 * scale, -25 * scale, -12 * scale + flap * 2);
+        c.stroke();
+        // body + neck
+        blob(c, 0, -12 * scale, 13 * scale, 12 * scale, primary, dark);
+        c.strokeStyle = primary;
+        c.lineWidth = 9 * scale;
+        c.beginPath();
+        c.moveTo(4 * scale, -18 * scale);
+        c.quadraticCurveTo(10 * scale, -30 * scale, 6 * scale, -38 * scale);
+        c.stroke();
+        // head
+        c.save();
+        c.translate(7 * scale, -40 * scale);
+        c.rotate(attack > 0 ? -0.25 : 0.1);
+        blob(c, 0, 0, 9 * scale, 7 * scale, primary, dark);
+        c.fillStyle = dark;
+        c.beginPath();
+        c.moveTo(6 * scale, -3 * scale);
+        c.lineTo(18 * scale, 1 * scale);
+        c.lineTo(6 * scale, 5 * scale);
+        c.closePath();
+        c.fill();
+        glowEyes(c, 2 * scale, -3 * scale, 3 * scale, 1.7 * scale, eye);
+        drawHorns(c, pal, scale * 0.9);
+        c.restore();
+        if (monster.tier === 'boss' && monster.enrage > 0) {
+          c.globalAlpha = 0.2 + monster.enrage * 0.25;
+          blob(c, 0, -18 * scale, 26 * scale, 30 * scale, Utils.rgba(pal.eye || '#ff7a3a', 1));
+          c.globalAlpha = 1;
+        }
+      }
+
+      else if (body === 'wraith') {
+        const float = Math.sin(time * 2 + monster.bob) * 3;
+        c.save();
+        c.translate(0, float);
+        c.globalAlpha = 0.9;
+        // tattered cloak
+        c.fillStyle = primary;
+        c.beginPath();
+        c.moveTo(0, -34 * scale);
+        c.quadraticCurveTo(-18 * scale, -14 * scale, -14 * scale, 8 * scale);
+        for (let i = 0; i < 4; i++) {
+          const x = -14 * scale + i * (28 * scale / 4);
+          c.quadraticCurveTo(x + 4 * scale, 2 * scale, x + 7 * scale, 8 * scale);
+        }
+        c.quadraticCurveTo(18 * scale, -14 * scale, 0, -34 * scale);
+        c.closePath();
+        c.fill();
+        // hood
+        c.fillStyle = secondary;
+        c.beginPath();
+        c.arc(0, -26 * scale, 9 * scale, Math.PI * 0.9, Math.PI * 2.1);
+        c.fill();
+        c.fillStyle = dark;
+        c.beginPath();
+        c.arc(0, -25 * scale, 6.5 * scale, 0, Math.PI * 2);
+        c.fill();
+        glowEyes(c, 0, -25 * scale, 3 * scale, 1.8 * scale, eye);
+        // arms
+        c.strokeStyle = primary;
+        c.lineWidth = 4 * scale;
+        c.lineCap = 'round';
+        c.beginPath();
+        c.moveTo(-10 * scale, -18 * scale);
+        c.lineTo(-18 * scale, -6 * scale);
+        c.moveTo(10 * scale, -18 * scale);
+        c.lineTo(18 * scale, -8 * scale);
+        c.stroke();
+        c.globalAlpha = 1;
+        c.restore();
+        if (def.crown) {
+          c.fillStyle = accent;
+          c.beginPath();
+          c.moveTo(-8 * scale, -34 * scale);
+          c.lineTo(-4 * scale, -41 * scale);
+          c.lineTo(0, -34 * scale);
+          c.lineTo(4 * scale, -41 * scale);
+          c.lineTo(8 * scale, -34 * scale);
+          c.closePath();
+          c.fill();
+        }
+      }
+
+      else if (body === 'scorpion') {
+        // claws
+        [-1, 1].forEach(function (dir) {
+          c.save();
+          c.scale(dir, 1);
+          c.strokeStyle = primary;
+          c.lineWidth = 4.4 * scale;
+          c.lineCap = 'round';
+          c.beginPath();
+          c.moveTo(6 * scale, -6 * scale);
+          c.quadraticCurveTo(20 * scale, -12 * scale, 24 * scale, -4 * scale);
+          c.stroke();
+          blob(c, 25 * scale, -3 * scale, 6 * scale, 5 * scale, secondary, dark);
+          c.fillStyle = dark;
+          c.beginPath();
+          c.moveTo(28 * scale, -6 * scale); c.lineTo(34 * scale, -8 * scale); c.lineTo(29 * scale, -1 * scale);
+          c.closePath(); c.fill();
+          c.restore();
+        });
+        // legs
+        c.strokeStyle = dark;
+        c.lineWidth = 2.6 * scale;
+        for (let i = 0; i < 3; i++) {
+          [-1, 1].forEach(function (dir) {
+            const step = Math.sin(time * 6 + i) * 1.6 * scale;
+            c.beginPath();
+            c.moveTo(dir * 6 * scale, -6 * scale);
+            c.lineTo(dir * 16 * scale, 4 * scale + step);
+            c.stroke();
+          });
+        }
+        // body + tail
+        blob(c, 0, -10 * scale, 15 * scale, 9 * scale, primary, dark);
+        c.strokeStyle = primary;
+        c.lineWidth = 5 * scale;
+        c.beginPath();
+        c.moveTo(-6 * scale, -12 * scale);
+        c.quadraticCurveTo(-22 * scale, -18 * scale, -20 * scale, -30 * scale + Math.sin(time * 3) * 2);
+        c.stroke();
+        blob(c, -20 * scale, -32 * scale, 4.6 * scale, 5 * scale, accent, dark);
+        glowEyes(c, 3 * scale, -12 * scale, 3 * scale, 1.6 * scale, eye);
+      }
+
+      else {
+        // elemental / fallback: swirling core
+        const pulse = 1 + Math.sin(time * 4 + monster.bob) * 0.08;
+        c.globalAlpha = 0.4;
+        blob(c, 0, -14 * scale, 22 * scale * pulse, 24 * scale * pulse, Utils.rgba(pal.accent || primary, 0.5));
+        c.globalAlpha = 1;
+        blob(c, 0, -14 * scale, 13 * scale, 15 * scale, primary, dark);
+        glowEyes(c, 0, -16 * scale, 4 * scale, 2.2 * scale, eye);
+      }
+
+      if (def.aura) {
+        c.globalAlpha = 0.16 + Math.sin(time * 2.4) * 0.05;
+        blob(c, 0, -14 * scale, 26 * scale, 30 * scale, Utils.rgba(def.aura, 1));
+        c.globalAlpha = 1;
+      }
+      c.restore();
+    }
+
+    /** Full creature draw: shadow, body, telegraph, bars and status overlays. */
+    function drawCreature(c, monster, state) {
+      if (!monster.alive) {
+        const remaining = Math.max(0, monster.respawnTimer);
+        const home = monster.home || monster.pos;
+        c.save();
+        c.globalAlpha = 0.55;
+        c.setLineDash([6, 6]);
+        c.strokeStyle = Utils.rgba((monster.palette && monster.palette.primary) || '#999999', 0.8);
+        c.lineWidth = 2;
+        c.beginPath();
+        c.ellipse(home.x, home.y + 4, 22, 9, 0, 0, Math.PI * 2);
+        c.stroke();
+        c.setLineDash([]);
+        c.restore();
+        void remaining;
+        return;
+      }
+
+      const p = monster.pos;
+      const scale = monster.scale || 1;
+      const speedFactor = monster.aggro ? 1 : 0.6;
+      const hop = Math.abs(Math.sin(state.time * 3 * speedFactor + monster.bob)) * 2.4;
+      const bob = -hop;
+
+      drawShadow(c, p.x, p.y, monster.radius, 0.3);
+
+      // boss ground aura
+      if (monster.isBoss) {
+        c.save();
+        c.globalAlpha = 0.18 + Math.sin(state.time * 2) * 0.05;
+        c.fillStyle = (monster.def && monster.def.aura) || (monster.palette && monster.palette.eye) || '#ff8a3a';
+        c.beginPath();
+        c.ellipse(p.x, p.y, monster.radius * 2.1, monster.radius * 0.7, 0, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+
+      c.save();
+      c.translate(p.x, p.y + bob - (monster.body === 'wraith' || monster.body === 'bat' ? 8 * scale : 0));
+      c.scale(monster.facing && monster.facing.x > 0 ? 1 : -1, 1);
+      if (monster.spawnPulse > 0) c.globalAlpha = Utils.clamp(monster.spawnPulse, 0.2, 1);
+
+      drawCreatureShape(c, monster, state.time);
+
+      // ability telegraph ring
+      if (monster.telegraphMs > 0) {
+        const ratio = Utils.clamp(monster.telegraphMs / Math.max(1, monster.telegraphTotal || 1), 0, 1);
+        const radius = (monster.telegraphRadius || 90);
+        c.globalAlpha = 0.35 + (1 - ratio) * 0.35;
+        c.strokeStyle = '#ff6b4a';
+        c.lineWidth = 4;
+        c.beginPath();
+        c.ellipse(0, -4, radius, radius * 0.42, 0, 0, Math.PI * 2);
+        c.stroke();
+        c.globalAlpha = 0.18;
+        c.fillStyle = '#ff6b4a';
+        c.fill();
+        c.globalAlpha = 1;
+      }
+
+      // hit flash
+      if (monster.hitFlash > 0) {
+        c.globalAlpha = Utils.clamp(monster.hitFlash, 0, 1) * 0.7;
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.ellipse(0, -14 * scale, 20 * scale, 22 * scale, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+      }
+
+      // status effects
+      if (Statuses.isFrozen(monster)) {
+        c.globalAlpha = 0.45;
+        c.fillStyle = '#bfefff';
+        c.beginPath();
+        c.ellipse(0, -12 * scale, 22 * scale, 24 * scale, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+      } else if (Statuses.isSlowed(monster)) {
+        c.globalAlpha = 0.25;
+        c.fillStyle = '#8fe3ff';
+        c.beginPath();
+        c.ellipse(0, -12 * scale, 21 * scale, 23 * scale, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+      }
+      if (Statuses.isBurning(monster)) {
+        for (let i = 0; i < 3; i++) {
+          const phase = state.time * 6 + i * 2.1;
+          c.fillStyle = (monster.status && monster.status.poison) ? 'rgba(155,227,106,0.75)' : 'rgba(255,155,74,0.8)';
+          c.beginPath();
+          c.ellipse(Math.sin(phase) * 12 * scale, -26 * scale - (Math.sin(phase * 1.4) * 0.5 + 0.5) * 12, 3.2, 5.4, Math.sin(phase) * 0.6, 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+      if (monster.status && monster.status.stunMs > 0) {
+        c.fillStyle = '#ffe9a8';
+        for (let i = 0; i < 3; i++) {
+          const a = state.time * 5 + (i / 3) * Math.PI * 2;
+          c.beginPath();
+          c.arc(Math.cos(a) * 16, -34 * scale + Math.sin(a) * 4, 2.2, 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+      c.restore();
+
+      // name plate + hp bar (flipped back to screen space)
+      const plateY = p.y - (28 + 24 * scale);
+      drawNameTag(c, p.x, plateY, monster.name, 'Lv. ' + monster.level, monster.isBoss ? '#ffd76a' : '#ffd9c6');
+      drawMiniBar(c, p.x, plateY + 10, monster.isBoss ? 76 : 54, monster.isBoss ? 7 : 6,
+        monster.hp / monster.maxHp, '#ff8a5c', '#3a1206');
+    }
+
     function drawNameTag(c, x, y, name, sub, color) {
       c.save();
       c.textAlign = 'center';
@@ -1841,10 +2699,21 @@
       c.restore();
     }
 
+    /** Re-skin the battle background (chapter themes). */
+    function setPalette(palette) {
+      if (!palette) return null;
+      Object.keys(palette).forEach(function (key) {
+        if (typeof palette[key] === 'string') ZONE.palette[key] = palette[key];
+      });
+      ctx.background = buildBackground();   // rebuild immediately (once per stage)
+      return ZONE.palette;
+    }
+
     return {
       init: init,
       resize: resize,
       render: render,
+      setPalette: setPalette,
       drawHero: drawHero,
       context2d: function () { return ctx.ctx2d; },
       getBackground: function () { return ctx.background; }
@@ -2081,8 +2950,11 @@
    * ========================================================== */
   const Log = (function () {
     function push(message, className) {
+      if (root.MytharaCore && root.MytharaCore.Bus) {
+        root.MytharaCore.Bus.emit('log', { message: message, className: className || '' });
+      }
       const el = HUD.el.log;
-      if (!el) return;
+      if (!el || !el.insertBefore) return;
       const item = document.createElement('li');
       item.textContent = message;
       if (className) item.className = className;
@@ -2555,9 +3427,16 @@
       return ui;
     }
 
+    /** Stop the preview animation loop (used when leaving the screen). */
+    function close() {
+      closeSheet();
+      stopLoop();
+    }
+
     return {
       init: init,
       open: open,
+      close: close,
       closeSheet: closeSheet,
       select: select,
       confirm: confirm,
@@ -2582,6 +3461,9 @@
       monster: null,         // primary target (nearest alive monster)
       monsters: [],          // every monster in the zone
       character: null,       // { classId, name }
+      mode: 'free',          // 'free' | 'stage' | 'boss' | 'arena'
+      battle: null,          // battle context supplied by js/battle.js
+      rewardSink: null,      // override for coins/xp payouts (battle modes)
       rafId: 0,
       lastTimestamp: 0,
       systems: [],          // extra update systems registered by later modules
@@ -2596,8 +3478,17 @@
       };
     }
 
+    /**
+     * Emit an engine event to both the internal handler map (legacy
+     * Game.on listeners) and the shared MytharaCore.Bus used by the
+     * progression modules (battle.js, systems.js, ui.js).
+     */
     function emit(event, payload) {
-      (state.handlers[event] || []).forEach(function (handler) { handler(payload); });
+      (state.handlers[event] || []).forEach(function (handler) {
+        try { handler(payload); } catch (err) { if (root.console) root.console.error('[game:' + event + ']', err); }
+      });
+      const core = root.MytharaCore;
+      if (core && core.Bus) core.Bus.emit(event, payload);
     }
 
     function registerSystem(system) {
@@ -2624,7 +3515,11 @@
       const name = (opts.name && String(opts.name).trim()) || PLAYER_DEF.name;
 
       state.character = { classId: classDef.id, name: name };
+      void 0;
       state.player = createPlayer(classDef.id, name);
+      if (opts.level && opts.level > 1) state.player.level = Math.min(100, Math.round(opts.level));
+      if (opts.equipmentBonus) state.player.equipmentBonus = opts.equipmentBonus;
+      if (opts.maxHpBonus || opts.maxMpBonus) state.player.flatBonus = { maxHp: opts.maxHpBonus || 0, maxMp: opts.maxMpBonus || 0 };
       Projectiles.clear();
       createMonsters();
       Effects.reset();
@@ -2670,7 +3565,69 @@
       }
     }
 
+    /* ---------- battle modes ---------- */
+    /**
+     * 'free' — the original Verdant Hollow playground (slime respawns forever).
+     * 'stage' / 'boss' — adventure waves driven by js/battle.js.
+     * 'arena' — a duel against an AI opponent.
+     */
+    function setMode(mode, context) {
+      state.mode = mode || 'free';
+      state.battle = context || null;
+      emit('modeChange', { mode: state.mode, context: state.battle });
+      return state.mode;
+    }
+
+    /** Add enemies created by createEnemy() to the live battle. */
+    function spawnEnemies(enemies) {
+      (enemies || []).forEach(function (enemy) {
+        if (!enemy || enemy.invalid) return;
+        state.monsters.push(enemy);
+      });
+      return state.monsters.length;
+    }
+
+    function clearEnemies() {
+      state.monsters = [];
+      state.monster = null;
+      Projectiles.clear();
+    }
+
+    /** Convenience used by the UI: current primary target. */
+    function primaryTarget() { return state.monster; }
+
+    function aliveEnemies() {
+      return (state.monsters || []).filter(function (monster) { return monster.alive; });
+    }
+
     /** Switch between the character-select screen and the game. */
+    /**
+     * Apply a chapter's colour theme to the playfield. `theme` accepts the
+     * stage palette shape ({ sky:[top,bottom], ground:[top,bottom], accent })
+     * or null to restore the default zone look.
+     */
+    function setZoneTheme(theme, zoneName, doc) {
+      const base = Object.assign({}, DATA.ZONES[DATA.activeZone].palette);
+      if (theme) {
+        if (theme.sky) { base.skyTop = theme.sky[0]; base.skyBottom = theme.sky[1]; }
+        if (theme.ground) { base.groundTop = theme.ground[0]; base.groundBottom = theme.ground[1]; }
+        if (theme.accent) base.sun = theme.accent;
+        base.mountainFar = Utils.shade(base.skyTop, -0.12);
+        base.mountainNear = Utils.shade(base.skyTop, -0.34);
+        base.hillFar = Utils.shade(base.groundTop, 0.14);
+        base.hillNear = Utils.shade(base.groundTop, -0.2);
+        base.tree = Utils.shade(base.groundTop, -0.32);
+        base.treeDark = Utils.shade(base.groundTop, -0.52);
+        base.trunk = Utils.shade(base.groundBottom, -0.3);
+        base.rock = Utils.shade(base.mountainNear, 0.18);
+        base.path = Utils.shade(base.groundBottom, 0.3);
+      }
+      Renderer.setPalette(base);
+      if (zoneName) HUD.setZone(zoneName);
+      void doc;
+      return base;
+    }
+
     function setScreen(name) {
       state.screen = name;
       const doc = root.document;
@@ -2811,11 +3768,14 @@
       HUD.render(state);
     }
 
+    let clearEmitted = false;
+
     function update(dt) {
       const player = state.player;
 
       updatePlayer(player, dt);
       updateMonsters(dt);
+      checkBattleProgress();
       updateProjectiles(dt);
       Skills.tick(player, dt);
       updateRegen(player, dt);
@@ -2834,22 +3794,51 @@
       player.hurtTimer = Math.max(0, player.hurtTimer - dt * 1000);
 
       if (player.downed) {
-        player.respawnTimer -= dt;
-        if (player.respawnTimer <= 0) revivePlayer(player);
+        Anim.set(player, 'death');
+        Anim.update(player, dt);
+        if (state.mode === 'free') {
+          player.respawnTimer -= dt;
+          if (player.respawnTimer <= 0) revivePlayer(player);
+        }
+        return;
+      }
+
+      // status effects on the player: burn/poison damage, slow, freeze/stun
+      const dotDamage = Statuses.update(player, dt);
+      if (dotDamage > 0) {
+        player.hp = Math.max(0, player.hp - dotDamage);
+        Effects.addFloater(player.pos.x + Utils.randRange(-8, 8), player.pos.y - 58,
+          '-' + Math.max(1, Math.round(dotDamage)), {
+            color: player.status && player.status.poison ? '#9be36a' : '#ff9b4a',
+            size: 14, life: 620, vy: -22
+          });
+        if (player.hp <= 0) { knockDownPlayer(player); return; }
+      }
+      if (Statuses.isIncapacitated(player)) {
+        player.moving = false;
+        Anim.update(player, dt, 'idle');
+        clampToWorld(player);
         return;
       }
 
       const axis = Input.axis();
       player.moving = axis.active;
+      player.running = state.mode === 'free' && axis.active;
 
       if (axis.active) {
-        const step = player.speed * dt;
+        const step = player.speed * Statuses.speedMultiplier(player) * dt;
         player.pos.x += axis.x * step;
         player.pos.y += axis.y * step;
         player.facing.x = axis.x;
         player.facing.y = axis.y;
         player.walkPhase += dt * 9;
       }
+
+      // animation state follows what the player is doing
+      if (!Anim.isBusy(player)) {
+        Anim.set(player, player.moving ? (player.running ? 'run' : 'walk') : 'idle');
+      }
+      Anim.update(player, dt, player.moving ? 'walk' : 'idle');
 
       clampToWorld(player);
       separateFromMonster(player, nearestMonster(player.pos.x, player.pos.y, 60));
@@ -2888,6 +3877,24 @@
       player.mp = Math.min(player.maxMp, player.mp + (player.mpRegenPerSecond || 0) * dt);
     }
 
+    /** Fire an event once per wave/room clear so battle.js can advance. */
+    function checkBattleProgress() {
+      if (state.mode === 'free') { clearEmitted = false; return; }
+      const remaining = aliveEnemies().length;
+      if (remaining === 0 && !clearEmitted) {
+        clearEmitted = true;
+        emit('battle:cleared', { mode: state.mode });
+      } else if (remaining > 0) {
+        clearEmitted = false;
+      }
+    }
+
+    /** Public: let battle.js re-arm the clear detector after spawning a wave. */
+    function rearmBattleProgress() {
+      clearEmitted = false;
+      return true;
+    }
+
     /** Nearest alive monster to a point (optionally within a max distance). */
     function nearestMonster(x, y, maxDistance) {
       let best = null;
@@ -2913,6 +3920,7 @@
       player.attackCooldown = player.attackCooldownMs;
       player.attackAnim = 1;
       player.attackKind = player.attackType;
+      Anim.set(player, 'attack', { durationMs: Math.min(420, player.attackCooldownMs) });
       emit('playerAttack', { player: player });
 
       if (player.attackType === 'ranged') rangedBasicAttack(player);
@@ -3003,8 +4011,10 @@
       monster.hp = Math.max(0, monster.hp - result.damage);
       monster.hitFlash = 1;
       monster.aggro = true;
+      if (!monster.telegraphMs) Anim.set(monster, 'hurt');
 
       const source = opts.source || 'player';
+      void source;
       const color = result.crit ? '#ffd76a' : (opts.color || '#ffffff');
       Effects.addFloater(monster.pos.x, monster.pos.y - 62, result.damage, {
         color: color, size: result.crit ? 26 : 19
@@ -3071,6 +4081,7 @@
 
       player.attackAnim = 1;
       player.attackKind = 'cast';
+      Anim.set(player, skill.ultimate ? 'ultimate' : 'skill', { durationMs: skill.ultimate ? 1500 : 720 });
       applySkillEffect(player, skill, target);
       Log.push(player.name + ' uses ' + skill.name + '.', 'log--level');
       emit('skillCast', { player: player, skill: skill, target: target });
@@ -3242,6 +4253,27 @@
     function updateProjectiles(dt) {
       Projectiles.update(dt, {
         monsters: function () { return state.monsters || []; },
+        players: function () { return state.player && !state.player.downed ? [state.player] : []; },
+        onHitPlayer: function (projectile, target) {
+          const payload = projectile.payload || {};
+          const owner = payload.owner || { name: 'Enemy', attack: 10 };
+          const player = target;
+          if (Utils.random() < (player.evasion || 0)) {
+            Effects.addFloater(player.pos.x, player.pos.y - 64, 'MISS', { color: '#bfefff', size: 16, life: 700 });
+            return;
+          }
+          const result = Combat.rollDamage(owner, player, { multiplier: payload.multiplier || 1 });
+          const damage = Combat.mitigate(player, result.damage);
+          player.hp = Math.max(0, player.hp - damage);
+          player.hitFlash = 1;
+          player.hurtTimer = COMBAT.outOfCombatRegenDelayMs;
+          Anim.set(player, 'hurt');
+          Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, { color: '#ff8080', size: 18 });
+          Effects.burst(projectile.x, projectile.y, projectile.def.color, 8, { speedMax: 90 });
+          Effects.addShake(3);
+          if (projectile.def.apply) Statuses.apply(player, projectile.def.apply, owner, {});
+          if (player.hp <= 0) knockDownPlayer(player);
+        },
         onHit: function (projectile, monster) {
           const payload = projectile.payload || {};
           const player = state.player;
@@ -3288,10 +4320,13 @@
       monster.alive = false;
       monster.aggro = false;
       monster.deathTimer = 0.4;
-      monster.respawnTimer = (monster.def.respawnMs || 4000) / 1000;
+      monster.respawnTimer = monster.isDuelist ? 99999 : ((monster.def && monster.def.respawnMs) || 4000) / 1000;
       monster.attackCooldown = 0;
+      Anim.set(monster, 'death');
+      if (monster.isDuelist) { emit('arena:botDown', { duelist: monster }); }
 
-      Effects.burst(monster.pos.x, monster.pos.y, monster.def.palette.body, 22, { speedMax: 200, lift: 80 });
+      const burstColor = (monster.def && monster.def.palette && monster.def.palette.body) || '#c9b2ff';
+      Effects.burst(monster.pos.x, monster.pos.y, burstColor, 22, { speedMax: 200, lift: 80 });
       Effects.addShake(6);
 
       const rewards = monster.def.rewards || { exp: 0, goldMin: 0, goldMax: 0 };
@@ -3303,6 +4338,14 @@
       state.player.exp += expGain;
       if (attacker && attacker.kind === 'player') Skills.addRage(attacker, 12);
       Statuses.clear(monster);
+
+      // battle modes route rewards through the account instead of the local player
+      const enemyCoins = monster.coins || goldGain;
+      const enemyXp = monster.xp || expGain;
+      if (typeof state.rewardSink === 'function') {
+        state.rewardSink({ coins: enemyCoins, xp: enemyXp, monster: monster });
+      }
+      emit('enemy:killed', { monster: monster, coins: enemyCoins, xp: enemyXp, isBoss: !!monster.isBoss });
 
       Effects.addFloater(monster.pos.x - 30, monster.pos.y - 70, '+' + expGain + ' EXP', {
         color: '#c4a7ff', size: 15, life: 1200, vy: -30, vx: -6
@@ -3340,6 +4383,20 @@
 
       const player = state.player;
 
+      // ---------- telegraphed ability wind-up ----------
+      if (monster.telegraphMs > 0) {
+        monster.telegraphMs -= dt * 1000;
+        if (monster.telegraphMs <= 0 && monster.telegraph) {
+          executeAbility(monster, monster.telegraph, player);
+          monster.telegraph = null;
+        }
+        clampToWorld(monster);
+        return;
+      }
+
+      // ---------- ability cooldowns (bosses and casters) ----------
+      updateAbilities(monster, dt, player);
+
       // damage-over-time (burn / poison) ticks
       const dotDamage = Statuses.update(monster, dt);
       if (dotDamage > 0) {
@@ -3362,21 +4419,167 @@
       const speedMultiplier = Statuses.speedMultiplier(monster);
       const hidden = Skills.isStealthed(player);
       const distanceToPlayer = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
+      const aggroRange = monster.isBoss ? 900 : effectiveAggroRange(monster);
 
-      if (player.downed || hidden || distanceToPlayer > monster.def.aggroRange) {
+      if (player.downed || hidden || distanceToPlayer > aggroRange) {
         monster.aggro = false;
+        Anim.set(monster, 'walk');
         wander(monster, dt, speedMultiplier);
       } else {
         monster.aggro = true;
-        const reach = monster.radius + player.radius + monster.def.attackRange;
+        const reach = monster.radius + player.radius + (monster.def.attackRange || 14);
+        monster.facing = { x: player.pos.x - monster.pos.x, y: player.pos.y - monster.pos.y };
         if (distanceToPlayer > reach) {
-          moveToward(monster, player.pos.x, player.pos.y, monster.speed * speedMultiplier * dt);
+          const chasing = monster.speed * speedMultiplier * (1 + (monster.enrage || 0)) * dt;
+          moveToward(monster, player.pos.x, player.pos.y, chasing);
+          if (!Anim.isBusy(monster)) Anim.set(monster, distanceToPlayer > 220 ? 'run' : 'walk');
         } else if (monster.attackCooldown <= 0) {
           monsterAttack(monster, player);
         }
       }
 
+      Anim.update(monster, dt, monster.aggro ? 'walk' : 'idle');
       clampToWorld(monster);
+    }
+
+    /** Bosses keep hunting; normal enemies use their data range plus alert radius. */
+    function effectiveAggroRange(monster) {
+      const base = (monster.def && monster.def.aggroRange) || 240;
+      return base + (monster.aggro ? 260 : 0);
+    }
+
+    /* ---------------- enemy abilities ---------------- */
+    function updateAbilities(monster, dt, player) {
+      if (!monster.abilities || !monster.abilities.length) return;
+      if (player.downed) return;
+      const distance = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
+
+      // boss phase transitions
+      if (monster.phases && monster.phases.length) {
+        const ratio = monster.hp / monster.maxHp;
+        while (monster.phaseIndex < monster.phases.length && ratio <= monster.phases[monster.phaseIndex].hpPct) {
+          const phase = monster.phases[monster.phaseIndex];
+          monster.phaseIndex += 1;
+          if (phase.enrage) {
+            monster.enrage = (monster.enrage || 0) + phase.enrage;
+            monster.attack = Math.round(monster.attack * (1 + phase.enrage * 0.5));
+          }
+          if (phase.text) {
+            Effects.addFloater(monster.pos.x, monster.pos.y - 96, phase.text, { color: '#ffd76a', size: 15, life: 1800, vy: -14 });
+          }
+          Effects.addShake(7);
+          Effects.burst(monster.pos.x, monster.pos.y - 10, (monster.def && monster.def.aura) || '#ff8a3a', 30, { speedMax: 260, lift: 90 });
+          emit('boss:phase', { monster: monster, phase: phase, index: monster.phaseIndex });
+        }
+      }
+
+      for (let i = 0; i < monster.abilities.length; i++) {
+        const ability = monster.abilities[i];
+        if (ability.timerMs > 0) { ability.timerMs -= dt * 1000; continue; }
+        if (distance > (ability.range || 220) && ability.type !== 'summon' && ability.type !== 'teleport') continue;
+        // start the telegraph (wind-up) — the hit lands when it completes
+        const windup = ability.windupMs || 600;
+        monster.telegraph = ability;
+        monster.telegraphMs = windup;
+        monster.telegraphTotal = windup;
+        monster.telegraphRadius = ability.radius || 80;
+        ability.timerMs = ability.cooldownMs || 6000;
+        if (ability.name) {
+          Effects.addFloater(monster.pos.x, monster.pos.y - 84, ability.name, { color: '#ff9b6a', size: 13, life: windup + 200, vy: -8 });
+        }
+        break;
+      }
+    }
+
+    function executeAbility(monster, ability, player) {
+      if (!monster.alive) return;
+      Effects.addShake(ability.shake || 3);
+
+      if (ability.type === 'aoe') {
+        Effects.burst(monster.pos.x, monster.pos.y - 6, '#ff8a5c', 24, { speedMax: 240, lift: 60 });
+        const radius = ability.radius || 90;
+        const distance = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
+        if (!player.downed && distance <= radius + player.radius) {
+          const result = Combat.rollDamage(monster, player, { multiplier: ability.multiplier || 1.4 });
+          const damage = Combat.mitigate(player, result.damage);
+          player.hp = Math.max(0, player.hp - damage);
+          player.hurtTimer = COMBAT.outOfCombatRegenDelayMs;
+          Anim.set(player, 'hurt');
+          Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, { color: '#ff8080', size: 20 });
+          Log.push(monster.name + ' hits ' + player.name + ' with ' + (ability.name || 'a special attack') + ' for ' + damage + ' damage.', 'log--hurt');
+          if (ability.apply) Statuses.apply(player, ability.apply, monster, {});
+          if (ability.heal) {
+            const healed = Math.round(monster.maxHp * ability.heal);
+            monster.hp = Math.min(monster.maxHp, monster.hp + healed);
+            Effects.addFloater(monster.pos.x, monster.pos.y - 70, '+' + healed, { color: '#b8f5c0', size: 16 });
+          }
+          if (player.hp <= 0) knockDownPlayer(player);
+        }
+      }
+
+      if (ability.type === 'shoot') {
+        const def = DATA.PROJECTILES[ability.projectile];
+        if (!def) return;
+        const count = ability.count || 1;
+        const spread = ability.spread || 0.18;
+        const baseAngle = Math.atan2(player.pos.y - monster.pos.y, player.pos.x - monster.pos.x);
+        for (let i = 0; i < count; i++) {
+          const offset = count === 1 ? 0 : (i - (count - 1) / 2) * spread;
+          Projectiles.spawn(def, monster.pos.x, monster.pos.y - 10, baseAngle + offset, {
+            hostile: true,
+            multiplier: ability.multiplier || 1,
+            owner: monster
+          });
+        }
+      }
+
+      if (ability.type === 'summon' && state.monsters.length < 12) {
+        const catalog = root.MYTHARA_ENEMIES || DATA.ENEMIES || null;
+        const def = catalog && catalog.get ? catalog.get(ability.summon) : null;
+        if (!def) return;
+        const count = ability.count || 2;
+        for (let i = 0; i < count; i++) {
+          const angle = (i / count) * Math.PI * 2;
+          const minion = createEnemy(def, Math.max(1, monster.level - 3), {
+            spawn: {
+              x: Utils.clamp(monster.pos.x + Math.cos(angle) * 70, WORLD.margin, WORLD.width - WORLD.margin),
+              y: Utils.clamp(monster.pos.y + Math.sin(angle) * 50, WORLD.floorTop || WORLD.margin, WORLD.height - WORLD.margin)
+            }
+          });
+          state.monsters.push(minion);
+        }
+        Effects.burst(monster.pos.x, monster.pos.y - 10, '#c46bff', 22, { speedMax: 160, lift: 60 });
+        Log.push(monster.name + ' summons reinforcements!', 'log--hurt');
+        emit('battle:summon', { monster: monster, summon: ability.summon, count: count });
+      }
+
+      if (ability.type === 'dash') {
+        const angle = Math.atan2(player.pos.y - monster.pos.y, player.pos.x - monster.pos.x);
+        monster.pos.x = Utils.clamp(monster.pos.x + Math.cos(angle) * 90, WORLD.margin, WORLD.width - WORLD.margin);
+        monster.pos.y = Utils.clamp(monster.pos.y + Math.sin(angle) * 70, WORLD.floorTop || WORLD.margin, WORLD.height - WORLD.margin);
+        Effects.burst(monster.pos.x, monster.pos.y - 8, '#ffb347', 16, { speedMax: 170, lift: 40 });
+        if (!player.downed && Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y) <= monster.radius + player.radius + 18) {
+          const result = Combat.rollDamage(monster, player, { multiplier: ability.multiplier || 1.5 });
+          const damage = Combat.mitigate(player, result.damage);
+          player.hp = Math.max(0, player.hp - damage);
+          Anim.set(player, 'hurt');
+          Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, { color: '#ff8080', size: 20 });
+          if (player.hp <= 0) knockDownPlayer(player);
+        }
+      }
+
+      if (ability.type === 'teleport') {
+        Effects.burst(monster.pos.x, monster.pos.y - 10, '#c46bff', 18, { speedMax: 140, lift: 50 });
+        const corners = [
+          { x: WORLD.width - 140, y: (WORLD.floorTop || 300) + 60 },
+          { x: 140, y: WORLD.height - 90 },
+          { x: WORLD.width - 160, y: WORLD.height - 90 }
+        ];
+        const spot = Utils.pick(corners);
+        monster.pos.x = spot.x;
+        monster.pos.y = spot.y;
+        Effects.burst(monster.pos.x, monster.pos.y - 10, '#c46bff', 18, { speedMax: 140, lift: 50 });
+      }
     }
 
     function wander(monster, dt, speedMultiplier) {
@@ -3426,6 +4629,7 @@
       player.hp = Math.max(0, player.hp - damage);
       player.hitFlash = 1;
       player.hurtTimer = COMBAT.outOfCombatRegenDelayMs;
+      Anim.set(player, 'hurt');
       Skills.addRage(player, 5);
 
       Effects.addFloater(player.pos.x, player.pos.y - 64, '-' + damage, {
@@ -3449,9 +4653,13 @@
       player.buffs = [];
       Stats.recompute(player);
       Input.reset();
-      Log.push(player.name + ' has fallen! Recovering...', 'log--down');
+      Anim.set(player, 'death');
+      if (state.mode === 'free') {
+        Log.push(player.name + ' has fallen! Recovering...', 'log--down');
+      }
       Effects.addShake(9);
       emit('playerDowned', { player: player });
+      if (state.mode !== 'free') emit('battle:playerDown', { player: player, mode: state.mode });
     }
 
     function revivePlayer(player) {
@@ -3470,6 +4678,7 @@
     }
 
     function respawnMonster(monster) {
+      if (state.mode !== 'free') return;      // stage enemies stay down
       monster.alive = true;
       monster.hp = monster.maxHp;
       monster.pos.x = monster.home.x;
@@ -3553,9 +4762,21 @@
       createCharacter: createCharacter,
       createMonsters: createMonsters,
       setScreen: setScreen,
+      setZoneTheme: setZoneTheme,
       saveCharacter: saveCharacter,
       loadSavedCharacter: loadSavedCharacter,
       damageMonster: damageMonster,
+      knockDownPlayer: knockDownPlayer,
+      speedMultiplier: Statuses.speedMultiplier,
+      setMode: setMode,
+      spawnEnemies: spawnEnemies,
+      clearEnemies: clearEnemies,
+      aliveEnemies: aliveEnemies,
+      primaryTarget: primaryTarget,
+      createEnemy: createEnemy,
+      rearmBattleProgress: rearmBattleProgress,
+      Anim: Anim,
+      ENEMY_SCALING: ENEMY_SCALING,
       teleportPlayer: teleportPlayer,
       expNeededForLevel: expNeededForLevel,
       revivePlayer: revivePlayer,
@@ -3567,7 +4788,7 @@
    * 10. PUBLIC API + BOOTSTRAP
    * ========================================================== */
   const Mythara = {
-    version: '0.2.0-classes',
+    version: '0.3.0-rpg',
     Game: Game,
     Input: Input,
     Combat: Combat,
@@ -3576,6 +4797,7 @@
     Skills: Skills,
     Stats: Stats,
     Effects: Effects,
+    Anim: Anim,
     Renderer: Renderer,
     HUD: HUD,
     Log: Log,
@@ -3588,13 +4810,19 @@
   root.Mythara = Mythara;
   if (typeof module !== 'undefined' && module.exports) module.exports = Mythara;
 
-  if (root.document) {
-    const boot = function () { Game.init(); };
-    if (root.document.readyState === 'loading') {
-      root.document.addEventListener('DOMContentLoaded', boot);
-    } else {
-      boot();
-    }
+  /**
+   * Boot the playfield. The application shell (js/app.js) calls this once the
+   * player has loaded, signed in and picked a character. Calling it twice is
+   * safe — the second call is ignored.
+   */
+  let booted = false;
+  function boot(options) {
+    if (booted) return Game.state;
+    booted = true;
+    return Game.init(options || {});
   }
+  Mythara.boot = boot;
+  Mythara.isBooted = function () { return booted; };
+  Mythara.resetBoot = function () { booted = false; };
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);

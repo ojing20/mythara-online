@@ -10,6 +10,34 @@
 </head>
 <body class="theme-verdant">
 
+
+  <!-- ============================================================
+       SCREEN 0 — LOADING (app flow: shown first, before login)
+       ============================================================ -->
+  <section class="screen screen--loading" id="screen-loading" aria-label="Loading">
+    <div class="loading-bg" aria-hidden="true">
+      <span class="loading-orb loading-orb--a"></span>
+      <span class="loading-orb loading-orb--b"></span>
+      <span class="loading-orb loading-orb--c"></span>
+      <span class="loading-runes"></span>
+    </div>
+    <div class="loading-panel">
+      <h1 class="game-title game-title--loading">Mythara <span class="game-title__accent">Online</span></h1>
+      <p class="loading-sub">A fantasy RPG of ten heroes and fifty trials</p>
+      <div class="loading-bar"><div class="loading-bar__fill" id="loading-fill"></div></div>
+      <p class="loading-text" id="loading-text">Loading Mythara&hellip;</p>
+      <p class="loading-tip" id="loading-tip">Tip: every class can clear the story — pick the one you enjoy.</p>
+      <p class="loading-version" id="loading-version">v0.3.0</p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       APP SHELL — login, menu, chapters, arena, inventory, ...
+       Built by js/ui.js when the app flow is active.
+       ============================================================ -->
+  <div class="app-root" id="app-root" hidden aria-live="polite"></div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
   <!-- ============================================================
        SCREEN 1 — CHARACTER SELECTION
        ============================================================ -->
@@ -215,7 +243,16 @@
     </div>
   </div>
 
+  <script src="js/core.js"></script>
   <script src="data.js"></script>
+  <script src="js/data-items.js"></script>
+  <script src="js/data-enemies.js"></script>
+  <script src="js/data-stages.js"></script>
   <script src="game.js"></script>
+  <script src="js/account.js"></script>
+  <script src="js/systems.js"></script>
+  <script src="js/battle.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

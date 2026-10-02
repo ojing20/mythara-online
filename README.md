@@ -3,7 +3,11 @@ Original fantasy MMORPG game project
 
 ---
 
-## Playable game (MVP foundation + character classes)
+## Playable game (MVP foundation → character classes → full RPG progression)
+
+The build now ships a complete single-player RPG loop on top of the canvas combat engine:
+accounts, a main menu, 10 chapters × 5 stages (50 stages, 10 bosses), bot arena duels, levels,
+equipment with upgrades, optional summoning, daily quests and rewards — all local-first.
 
 A browser fantasy MMORPG built with plain **HTML + CSS + JavaScript** — no frameworks, no build
 step, no dependencies, and no external art assets (every sprite and background is drawn with
@@ -115,6 +119,131 @@ screen, cards, previews, HUD and skill bar build themselves from the data.
 update systems, and debug hooks (`Game.createCharacter`, `Game.castSkill`, `Game.damageMonster`,
 `Game.teleportPlayer`) used by the test harness.
 
+## Full RPG progression systems
+
+The progression layer lives in `js/` and is deliberately decoupled from the canvas engine:
+the engine knows nothing about accounts, and the account layer knows nothing about rendering.
+
+### Flow
+
+`Loading → Login/Register → Main Menu → Character Selection → Adventure / Arena / Characters /
+Inventory / Equipment / Summon / Quests / Shop / Settings → Battle → Rewards → Save → Main Menu`
+
+### Accounts
+
+- Register with username, email and password; log in with either username or email, with
+  **remember me** supported. A remembered session is restored on the next visit.
+- Passwords are never stored in plain text: each account keeps a random salt and a hashed
+  password. The prototype uses a local (browser) auth backend, and `Auth.setBackend()` swaps in a
+  real server later without touching the UI.
+- Everything is account-bound: active character, character levels and EXP, coins, gems, tickets,
+  energy, HP/MP state, inventory, equipment, skills, unlocks, chapter/stage progress,
+  arena rating, potions, materials, quests and settings.
+- Old saves from the earlier canvas-only build (`mythara.character.v1`) are imported on first
+  login so no progress is lost.
+
+### Unlocks (10 classes)
+
+| Class | Coins | Account level | Fragments | | Class | Coins | Account level | Fragments |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Warrior | free | 1 | — | | Paladin | 2,500 | 25 | 60 |
+| Archer | 500 | 5 | 20 | | Priest | 3,000 | 30 | 70 |
+| Fire Mage | 1,000 | 10 | 30 | | Berserker | 3,500 | 35 | 80 |
+| Ice Mage | 1,500 | 15 | 40 | | Ninja | 4,000 | 40 | 90 |
+| Assassin | 2,000 | 20 | 50 | | Dragon Knight | 5,000 | 50 | 100 |
+
+Locked cards show a lock icon, the required account level, the coin price and fragment progress,
+plus an unlock sheet that spends coins or fragments when you can afford it. Fragments drop from
+stages, dailies and summons, so every class is reachable without spending a gem.
+
+### Adventure
+
+- **10 chapters × 5 stages = 50 stages.** Stages 1–4 are normal runs of **4 mob waves + a final
+  wave**; stage 5 is a **boss fight** with a dedicated health bar, telegraphed special attacks,
+  summoned reinforcements and multiple phases where the boss has them.
+- Each chapter has its own palette and bestiary — Silverstone Beginning (Forest Goblin / Wild
+  Wolf → Goblin King), Ancient Forest, Dark Caverns, Frozen Valley, Desert Ruins, Haunted Swamp,
+  Demon Castle, Dragon Mountain, Shadow Realm and Mythara's End (→ MYTHARA LORD).
+- The chapter palette re-skins the battle background, so the ten chapters look distinct.
+- Stage screen shows name, chapter, recommended level and power, energy cost, wave count, enemy
+  preview, possible rewards, best time and stars.
+- **Stars:** ★★★ cleared without falling and never dropping below 70% HP · ★★ cleared without
+  falling · ★ cleared using the one Second Wind revive. Rewards scale with stars, and first
+  clears pay bonus gems (bosses also grant a summon ticket).
+
+### Arena (bot duels — not online multiplayer)
+
+- 1v1 duels against an **AI opponent** built from a random class kit; the opponent moves, strafes,
+  dodges your wind-ups, casts class skills, heals, and fires ranged basics.
+- Five difficulties — Easy, Normal, Hard, Elite and Boss-tier — set the bot's level offset,
+  reaction time, aggression, dodge/skill/ultimate chances and rewards.
+- Ranked tiers: Bronze → Silver → Gold → Platinum → Diamond → Mythic, fed by arena rating,
+  with wins/losses, streak and win rate shown on the rank card.
+- **There is no online PvP.** The UI says so on the arena screen, and 3v3 is described as a
+  possible future mode only.
+
+### Resources, levels and equipment
+
+- **Coins** (unlocks, gear upgrades, potions, shop), **gems** (optional summons, energy refill,
+  special items), **EXP**, **energy** (stages; 100 max, one point per 240s), **potions**
+  (HP / MP / Full Recovery) and **materials** (upgrade stones, chapter ores).
+- Account level caps at 100; every character also levels 1–100 with its own EXP bar, level-up
+  animation and stat growth, unlocking skills along the way
+  (HP / MP / ATK / DEF / MAGIC / SPEED / CRITICAL / EVASION).
+- **9 equipment slots** — Weapon, Helmet, Armor, Gloves, Pants, Boots, Necklace, Ring, Wings —
+  across **6 rarities** (Common, Uncommon, Rare, Epic, Legendary, Mythic) with **+1 … +15**
+  upgrades (100% success below +5, then 90% / 75% / 60%, +6% stats per level).
+
+### Summoning (optional)
+
+Free tickets and earned gems only — no real-money purchases exist in the prototype. Single pulls
+cost 100 gems, ten-pulls cost 900. Rarities are Common, Uncommon, Rare, Epic, Legendary and
+Mythic with published rates, animated result cards and rarity effects. Summoning is a shortcut,
+not a requirement: characters are also unlockable with coins and stage fragments.
+
+### Daily rewards and quests
+
+- **7-day login rewards:** coins → potions → gems → equipment chest → summon ticket → upgrade
+  materials → character fragments, with a streak that resets if you miss a day.
+- **Daily quests:** defeat 10 monsters, clear 3 stages, win 1 arena battle, use 3 potions, upgrade
+  equipment — each paying coins/XP/gems/potions/materials/tickets, resetting every 24 hours.
+
+### Interface
+
+Dark-fantasy theme with gold accents, large tappable buttons, animated panels, progress bars,
+portraits, icons and a battle HUD (wave counter, objective, boss bar with phase, potion bar).
+Layouts adapt to desktop, tablet and phone widths, and combat is comfortable in landscape.
+
+## Files (RPG progression build)
+
+| File | Purpose |
+| --- | --- |
+| `index.html` | Loading screen, legacy character-select + canvas screens, app shell mount points, script order |
+| `style.css` | Theme tokens, HUD/bars, selection screen, and the full app shell (menus, cards, modals, battle HUD) with responsive + landscape rules |
+| `data.js` | Legacy content + combat rules: config, items, projectiles, skills, the 10 classes, monsters, zones |
+| `game.js` | Canvas engine: `Utils`, `Input`, `Combat`, `Statuses`, `Projectiles`, `Skills`, `Stats`, `Anim`, entities, `Effects`, `Renderer`, `HUD`, `Log`, `CharacterSelect`, `Game` (modes, waves, enemy AI, boss phases) |
+| `js/core.js` | `MytharaCore`: event bus, namespaced storage with memory fallback, formatting, DOM and RNG helpers |
+| `js/data-items.js` | Rarities, slots, 54 equipment templates, potions, materials, unlock table, summon table, shop, daily rewards, quests, energy and level curves |
+| `js/data-enemies.js` | 39 enemies + 10 bosses (body types, palettes, abilities, phases), arena difficulty presets, PvP tiers |
+| `js/data-stages.js` | 10 chapters × 5 stages with waves, rewards, recommendations and palettes |
+| `js/account.js` | `MytharaAccount`: swappable `Auth` (salted hashing, sessions) and the `Account` progression API |
+| `js/systems.js` | Reusable systems: quests, daily rewards, shop, summon, gear, arena ranks, reward formatting |
+| `js/battle.js` | Battle controller: stage waves, boss encounters, stars and rewards, arena bot AI |
+| `js/ui.js` | Every app screen (auth, menu, adventure, arena, inventory, equipment, summon, quests, shop, settings) plus modals, toasts and the battle HUD |
+| `js/app.js` | Flow controller: loading → auth → menu → select → battle → rewards, saving, settings and legacy-save import |
+
+### Tests
+
+Five headless suites (jsdom + native canvas) cover the build — 464 checks total:
+
+| Suite | Checks | Covers |
+| --- | --- | --- |
+| `test.js` | 85 | Engine boot, HUD, combat, skills, touch controls, long-run stability |
+| `classes.test.js` | 129 | All 10 classes, previews, persistence, mobile selection, original-art rules |
+| `storage.test.js` | 6 | Storage-blocked fallback paths |
+| `appflow.js` | 132 | Loading → register → menu → select → stage battle → bosses → arena → shop/summon → save/reload |
+| `campaign.test.js` | 113 | All 50 stages and 10 bosses, unlocks, energy, quests, dailies, equipment, mobile, login variants, legacy import |
+
 ## Roadmap (not implemented yet)
 
-Guilds · PvP · dungeons · multiplayer.
+Guilds · dungeons · online multiplayer (the arena is bot-only) · 3v3 team battles.

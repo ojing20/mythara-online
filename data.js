@@ -212,6 +212,43 @@
     shuriken: {
       id: 'shuriken', name: 'Shuriken', style: 'star', speed: 640, radius: 7, stat: 'attack',
       color: '#d7e0f2', trail: '#9aa6c4', damageMultiplier: 1.4
+    },
+
+    /* --- enemy projectiles (fired by monsters in adventure stages) --- */
+    goblinStone: {
+      id: 'goblinStone', name: 'Goblin Stone', style: 'star', speed: 340, radius: 6, stat: 'attack',
+      color: '#a89a86', trail: '#6f6553', damageMultiplier: 1.0
+    },
+    poisonSpit: {
+      id: 'poisonSpit', name: 'Poison Spit', style: 'orb', speed: 330, radius: 7, stat: 'attack',
+      color: '#9be36a', trail: '#4f7a2a', damageMultiplier: 1.05,
+      apply: { poison: { dpsPct: 0.18, durationMs: 3000 } }
+    },
+    iceShard: {
+      id: 'iceShard', name: 'Ice Shard', style: 'shard', speed: 420, radius: 7, stat: 'attack',
+      color: '#bfefff', trail: '#5ec8f0', damageMultiplier: 1.1,
+      apply: { slow: { factor: 0.3, durationMs: 2500 } }
+    },
+    fireBreath: {
+      id: 'fireBreath', name: 'Fire Breath', style: 'orb', speed: 380, radius: 10, stat: 'attack',
+      color: '#ffb347', trail: '#ff5f1f', damageMultiplier: 1.25,
+      apply: { burn: { dpsPct: 0.16, durationMs: 3500 } }, explodeRadius: 46
+    },
+    voidOrb: {
+      id: 'voidOrb', name: 'Void Orb', style: 'orb', speed: 360, radius: 9, stat: 'attack',
+      color: '#c46bff', trail: '#5c1f8a', damageMultiplier: 1.3
+    },
+    shadowBolt: {
+      id: 'shadowBolt', name: 'Shadow Bolt', style: 'orb', speed: 430, radius: 8, stat: 'attack',
+      color: '#8a5cff', trail: '#2f1d52', damageMultiplier: 1.2
+    },
+    rockShard: {
+      id: 'rockShard', name: 'Rock Shard', style: 'star', speed: 400, radius: 8, stat: 'attack',
+      color: '#b9b2a0', trail: '#6f6a5a', damageMultiplier: 1.15
+    },
+    thornVolley: {
+      id: 'thornVolley', name: 'Thorn Volley', style: 'shard', speed: 450, radius: 6, stat: 'attack',
+      color: '#9be36a', trail: '#3f7a33', damageMultiplier: 1.05
     }
   };
 
@@ -233,7 +270,7 @@
       params: { durationMs: 6000, mods: { defensePct: 0.8 } }
     },
     whirlwind: {
-      id: 'whirlwind', name: 'Whirlwind', glyph: '\u2727', mp: 12, cooldownMs: 9000,
+      id: 'whirlwind', name: 'Whirlwind', glyph: '\u2727', mp: 12, cooldownMs: 9000, ultimate: true,
       kind: 'aoeSelf', description: 'Spin with the blade, striking everything within 95 units.',
       params: { multiplier: 1.3, radius: 95 }
     },
@@ -245,7 +282,7 @@
       params: { projectile: 'powerArrow' }
     },
     rainOfArrows: {
-      id: 'rainOfArrows', name: 'Rain of Arrows', glyph: '\u2726', mp: 12, cooldownMs: 9000,
+      id: 'rainOfArrows', name: 'Rain of Arrows', glyph: '\u2726', mp: 12, cooldownMs: 9000, ultimate: true,
       kind: 'projectile', description: 'Loose three arrows in a wide fan.',
       params: { projectile: 'arrow', count: 3, spread: 0.26, multiplier: 0.9 }
     },
@@ -262,7 +299,7 @@
       params: { projectile: 'fireball' }
     },
     flameNova: {
-      id: 'flameNova', name: 'Flame Nova', glyph: '\u2726', mp: 18, cooldownMs: 9000,
+      id: 'flameNova', name: 'Flame Nova', glyph: '\u2726', mp: 18, cooldownMs: 9000, ultimate: true,
       kind: 'aoeSelf', description: 'Erupt in flame, scorching everything within 120 units.',
       params: { multiplier: 1.9, radius: 120, apply: { burn: { dpsPct: 0.22, durationMs: 5000 } } }
     },
@@ -279,7 +316,7 @@
       params: { projectile: 'frostbolt' }
     },
     glacialPrison: {
-      id: 'glacialPrison', name: 'Glacial Prison', glyph: '\u2726', mp: 16, cooldownMs: 10000,
+      id: 'glacialPrison', name: 'Glacial Prison', glyph: '\u2726', mp: 16, cooldownMs: 10000, ultimate: true,
       kind: 'inflict', description: 'Encase the target in ice: 120% damage and a 1.8s freeze.',
       params: { multiplier: 1.2, freezeMs: 1800 }
     },
@@ -301,7 +338,7 @@
       params: { durationMs: 8000, mods: { attackPct: 0.1 }, poisonOnHit: { dpsPct: 0.25, durationMs: 5000 } }
     },
     fanOfKnives: {
-      id: 'fanOfKnives', name: 'Fan of Knives', glyph: '\u2727', mp: 10, cooldownMs: 8000,
+      id: 'fanOfKnives', name: 'Fan of Knives', glyph: '\u2727', mp: 10, cooldownMs: 8000, ultimate: true,
       kind: 'aoeSelf', description: 'Fling blades in every direction, hitting all foes within 100 units.',
       params: { multiplier: 1.2, radius: 100 }
     },
@@ -318,7 +355,7 @@
       params: { percent: 0.4 }
     },
     divineAegis: {
-      id: 'divineAegis', name: 'Divine Aegis', glyph: '\u2727', mp: 16, cooldownMs: 16000,
+      id: 'divineAegis', name: 'Divine Aegis', glyph: '\u2727', mp: 16, cooldownMs: 16000, ultimate: true,
       kind: 'buff', description: 'Aegis of light: +25% damage reduction, +4 defense and 4 HP/s for 8s.',
       params: { durationMs: 8000, mods: { damageReduction: 0.25, defense: 4 }, regenPerSecond: 4 }
     },
@@ -330,7 +367,7 @@
       params: { percent: 0.35 }
     },
     blessing: {
-      id: 'blessing', name: 'Blessing', glyph: '\u2726', mp: 14, cooldownMs: 15000,
+      id: 'blessing', name: 'Blessing', glyph: '\u2726', mp: 14, cooldownMs: 15000, ultimate: true,
       kind: 'buff', description: 'Invoke dawn: +20% attack and +25% magic for 9s.',
       params: { durationMs: 9000, mods: { attackPct: 0.2, magicPct: 0.25 } }
     },
@@ -342,7 +379,7 @@
 
     /* --- Berserker --- */
     cleave: {
-      id: 'cleave', name: 'Cleave', glyph: '\u25C6', mp: 8, cooldownMs: 7000,
+      id: 'cleave', name: 'Cleave', glyph: '\u25C6', mp: 8, cooldownMs: 7000, ultimate: true,
       kind: 'aoeSelf', description: 'A wide axe sweep hitting everything within 105 units for 150%.',
       params: { multiplier: 1.5, radius: 105 }
     },
@@ -364,7 +401,7 @@
       params: { projectile: 'shuriken' }
     },
     smokeBomb: {
-      id: 'smokeBomb', name: 'Smoke Bomb', glyph: '\u2726', mp: 12, cooldownMs: 14000,
+      id: 'smokeBomb', name: 'Smoke Bomb', glyph: '\u2726', mp: 12, cooldownMs: 14000, ultimate: true,
       kind: 'stealth', description: 'Vanish for 4s: enemies lose you and your crit chance surges.',
       params: { durationMs: 4000, critChance: 0.4, speedPct: 0.1 }
     },
@@ -386,7 +423,7 @@
       params: { durationMs: 8000, mods: { defense: 4, damageReduction: 0.2 }, regenPerSecond: 3 }
     },
     dragonsBreath: {
-      id: 'dragonsBreath', name: "Dragon's Breath", glyph: '\u2727', mp: 25, cooldownMs: 20000,
+      id: 'dragonsBreath', name: "Dragon's Breath", glyph: '\u2727', mp: 25, cooldownMs: 20000, ultimate: true,
       kind: 'aoeSelf', description: 'ULTIMATE — exhale draconic fire in a 150 unit blast for 260% damage and heavy burn.',
       params: {
         multiplier: 2.6, radius: 150, shake: 9,
