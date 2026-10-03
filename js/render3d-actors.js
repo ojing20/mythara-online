@@ -362,7 +362,10 @@
     const spawnFade = spawnPulse > 0 && spawnPulse < 1 ? clamp(spawnPulse, 0.2, 1) : 1;
 
     const classScale = actor.kind === 'duelist' ? 1 : 1;
-    const SCALE = 1.58 * classScale;                      // world units per rig unit (~34u tall hero)
+    // World scale: one rig unit ≈ 0.86 world units, so the hero stands about
+    // 21 units tall — village doors, market awnings and treetops are all sized
+    // against that number (see tools/scale-check.js).
+    const SCALE = 0.88 * classScale;
     const root = node(
       mat4.compose(v3(actor.pos.x, groundAt(actor.pos.x, actor.pos.y) + 0.4 + pose.root.y * SCALE * 0.4, actor.pos.y), v3(pose.root.rx, facingYaw(actor) + pose.root.ry, pose.root.rz), v3(SCALE, SCALE, SCALE))
     );
@@ -557,7 +560,7 @@
   function drawHumanoid(P, monster, a, opts) {
     const c = pal(monster);
     const def = monster.def || {};
-    const scale = (monster.scale || 1) * 1.6;
+    const scale = (monster.scale || 1) * 1.18;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * scale * 0.4, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: def.armored ? '#c9d2e0' : undefined };
@@ -609,7 +612,7 @@
 
   function drawBeast(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.55;
+    const scale = (monster.scale || 1) * 1.18;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * scale * 0.25, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)
     ));
     const body = { alpha: opts.alpha, tint: opts.tint };
@@ -647,7 +650,7 @@
 
   function drawArachnid(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.5;
+    const scale = (monster.scale || 1) * 0.93;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const abdomen = node(root, v3(0, 4.4, -3.2), v3(a.lunge * -0.1, 0, 0));
@@ -672,7 +675,7 @@
 
   function drawScorpion(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.5;
+    const scale = (monster.scale || 1) * 0.93;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.3 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const torso = node(root, v3(0, 4.0, 0), v3(a.lunge * -0.12, 0, 0));
@@ -700,7 +703,7 @@
 
   function drawBat(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.42;
+    const scale = (monster.scale || 1) * 0.93;
     const hover = groundAt(monster.pos.x, monster.pos.y) + 16 + Math.sin(a.cycle * 0.8) * 2.4;
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
@@ -721,7 +724,7 @@
 
   function drawGolem(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.62;
+    const scale = (monster.scale || 1) * 1.0;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint, trim: '#9aa0ae' };
     const torso = node(root, v3(0, 10.0, 0), v3(a.lunge * -0.14, 0, 0));
@@ -755,7 +758,7 @@
 
   function drawTreant(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.9;
+    const scale = (monster.scale || 1) * 1.72;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.4 + a.bob * 0.25, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
     const trunk = node(root, v3(0, 9.0, 0), v3(a.lunge * -0.16, 0, 0));
@@ -789,7 +792,7 @@
 
   function drawWraith(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.62;
+    const scale = (monster.scale || 1) * 1.0;
     const hover = groundAt(monster.pos.x, monster.pos.y) + 8 + Math.sin(a.cycle * 0.6) * 2.6 + (monster.def && monster.def.aura ? 2 : 0);
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha * 0.94, tint: opts.tint };
@@ -823,7 +826,7 @@
 
   function drawSerpent(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.9;
+    const scale = (monster.scale || 1) * 1.72;
     const flying = a.moving || (monster.def && monster.def.flags && monster.def.flags.indexOf('flying') >= 0);
     const lift = groundAt(monster.pos.x, monster.pos.y) + (flying ? 12 + a.bob * 2 : 4);
     const root = node(mat4.compose(v3(monster.pos.x, lift, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
@@ -867,7 +870,7 @@
 
   function drawBlob(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.9;
+    const scale = (monster.scale || 1) * 1.72;
     const squash = 1 + Math.sin((monster.walkPhase || 0) * 6 + 1) * 0.12 + a.lunge * 0.18;
     const root = node(mat4.compose(v3(monster.pos.x, groundAt(monster.pos.x, monster.pos.y) + 0.2 + a.bob * 0.3, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale * squash, scale)));
     const body = { alpha: opts.alpha * 0.92, tint: opts.tint };
@@ -888,7 +891,7 @@
 
   function drawElemental(P, monster, a, opts) {
     const c = pal(monster);
-    const scale = (monster.scale || 1) * 1.55;
+    const scale = (monster.scale || 1) * 0.96;
     const hover = groundAt(monster.pos.x, monster.pos.y) + 12 + a.bob * 2.4;
     const root = node(mat4.compose(v3(monster.pos.x, hover, monster.pos.y), v3(0, facingYaw(monster), 0), v3(scale, scale, scale)));
     const body = { alpha: opts.alpha, tint: opts.tint };
@@ -978,6 +981,21 @@
   /* ============================================================
    * 5. OVERLAYS — health bars, name tags, lock-on
    * ========================================================== */
+  /**
+   * Approximate top of each monster body in world units, so name plates, HP
+   * bars and the lock-on reticle sit just above the head at the new scale
+   * instead of floating a fixed distance into the sky.
+   */
+  const BODY_TOP = {
+    humanoid: 17, beast: 15.5, arachnid: 12, scorpion: 12.5, bat: 12,
+    golem: 24, treant: 34, wraith: 20, serpent: 17, blob: 12, elemental: 18
+  };
+
+  function labelHeight(m) {
+    const top = (BODY_TOP[m.body] || 16) * (m.scale || 1) * (m.isBoss ? 1.35 : 1);
+    return Math.max(15, top + 7);
+  }
+
   function drawOverlays(P, state, opts) {
     P.tag && P.tag('labels');
     const o = opts || {};
@@ -988,7 +1006,7 @@
       .sort(function (a, b) { return ((a.pos.x - eye.x) * (a.pos.x - eye.x) + (a.pos.y - eye.z) * (a.pos.y - eye.z)) - ((b.pos.x - eye.x) * (b.pos.x - eye.x) + (b.pos.y - eye.z) * (b.pos.y - eye.z)); });
     const placed = [];        // screen-space claims, so plates never stack up
     monsters.forEach(function (m) {
-      const height = 26 + (m.scale || 1) * 18;
+      const height = labelHeight(m);
       const pos = v3(m.pos.x, height, m.pos.y);
       const s = P.cam.project(pos, P.vp);
       if (!s.visible) return;
@@ -1038,7 +1056,7 @@
     // lock-on reticle + arrows
     if (o.lockTarget && o.lockTarget.alive) {
       const m = o.lockTarget;
-      const pos = v3(m.pos.x, 14 + (m.scale || 1) * 16, m.pos.y);
+      const pos = v3(m.pos.x, labelHeight(m) - 6, m.pos.y);
       S.ring(P, { x: m.pos.x, z: m.pos.y, radius: (m.radius || 18) + 16, thickness: 2.6, color: '#ffd76a', alpha: 0.6, segments: 28, phase: (o.time || 0) * 0.9 });
       const s = P.cam.project(pos, P.vp);
       if (s.visible) {
@@ -1065,6 +1083,7 @@
     drawActor: drawActor,
     drawHero: drawHero,
     drawOverlays: drawOverlays,
+    labelHeight: labelHeight,
     equipment: equipment,
     heroPose: heroPose,
     creatureAnimation: creatureAnimation

@@ -81,9 +81,9 @@
     critMultiplier: 1.6,
     evasion: 0.02,
     damageReduction: 0,
-    speed: 190,
-    radius: 16,
-    attackRange: 46,         // melee reach, measured edge-to-edge
+    speed: 118,             // world units/s — 21-unit hero, same feel as before
+    radius: 9,
+    attackRange: 34,         // melee reach, measured edge-to-edge
     autoTargetRange: 0,      // >0 lets ranged classes auto-aim
     attackCooldownMs: 550,
     hpRegenPerSecond: 1.5,
@@ -188,66 +188,66 @@
    * ========================================================== */
   const PROJECTILES = {
     arrow: {
-      id: 'arrow', name: 'Arrow', style: 'arrow', speed: 560, radius: 5, stat: 'attack',
+      id: 'arrow', name: 'Arrow', style: 'arrow', speed: 347, radius: 5, stat: 'attack',
       color: '#f0e2b0', trail: '#c9b87a', damageMultiplier: 1.0
     },
     powerArrow: {
-      id: 'powerArrow', name: 'Power Shot', style: 'arrow', speed: 700, radius: 6, stat: 'attack',
+      id: 'powerArrow', name: 'Power Shot', style: 'arrow', speed: 434, radius: 6, stat: 'attack',
       color: '#fff3c0', trail: '#ffd76a', damageMultiplier: 1.9, shake: 4
     },
     fireball: {
-      id: 'fireball', name: 'Fireball', style: 'orb', speed: 400, radius: 11, stat: 'magic',
+      id: 'fireball', name: 'Fireball', style: 'orb', speed: 248, radius: 11, stat: 'magic',
       color: '#ffb347', trail: '#ff5f1f', damageMultiplier: 1.6, explodeRadius: 80,
       apply: { burn: { dpsPct: 0.18, durationMs: 4000 } }, shake: 5
     },
     frostbolt: {
-      id: 'frostbolt', name: 'Frost Bolt', style: 'shard', speed: 470, radius: 8, stat: 'magic',
+      id: 'frostbolt', name: 'Frost Bolt', style: 'shard', speed: 291, radius: 8, stat: 'magic',
       color: '#bfefff', trail: '#5ec8f0', damageMultiplier: 1.3,
       apply: { slow: { factor: 0.45, durationMs: 3000 } }
     },
     holyBolt: {
-      id: 'holyBolt', name: 'Smite', style: 'orb', speed: 500, radius: 9, stat: 'magic',
+      id: 'holyBolt', name: 'Smite', style: 'orb', speed: 310, radius: 9, stat: 'magic',
       color: '#fff0b8', trail: '#ffe08a', damageMultiplier: 1.5
     },
     shuriken: {
-      id: 'shuriken', name: 'Shuriken', style: 'star', speed: 640, radius: 7, stat: 'attack',
+      id: 'shuriken', name: 'Shuriken', style: 'star', speed: 397, radius: 7, stat: 'attack',
       color: '#d7e0f2', trail: '#9aa6c4', damageMultiplier: 1.4
     },
 
     /* --- enemy projectiles (fired by monsters in adventure stages) --- */
     goblinStone: {
-      id: 'goblinStone', name: 'Goblin Stone', style: 'star', speed: 340, radius: 6, stat: 'attack',
+      id: 'goblinStone', name: 'Goblin Stone', style: 'star', speed: 211, radius: 6, stat: 'attack',
       color: '#a89a86', trail: '#6f6553', damageMultiplier: 1.0
     },
     poisonSpit: {
-      id: 'poisonSpit', name: 'Poison Spit', style: 'orb', speed: 330, radius: 7, stat: 'attack',
+      id: 'poisonSpit', name: 'Poison Spit', style: 'orb', speed: 205, radius: 7, stat: 'attack',
       color: '#9be36a', trail: '#4f7a2a', damageMultiplier: 1.05,
       apply: { poison: { dpsPct: 0.18, durationMs: 3000 } }
     },
     iceShard: {
-      id: 'iceShard', name: 'Ice Shard', style: 'shard', speed: 420, radius: 7, stat: 'attack',
+      id: 'iceShard', name: 'Ice Shard', style: 'shard', speed: 260, radius: 7, stat: 'attack',
       color: '#bfefff', trail: '#5ec8f0', damageMultiplier: 1.1,
       apply: { slow: { factor: 0.3, durationMs: 2500 } }
     },
     fireBreath: {
-      id: 'fireBreath', name: 'Fire Breath', style: 'orb', speed: 380, radius: 10, stat: 'attack',
+      id: 'fireBreath', name: 'Fire Breath', style: 'orb', speed: 236, radius: 10, stat: 'attack',
       color: '#ffb347', trail: '#ff5f1f', damageMultiplier: 1.25,
       apply: { burn: { dpsPct: 0.16, durationMs: 3500 } }, explodeRadius: 46
     },
     voidOrb: {
-      id: 'voidOrb', name: 'Void Orb', style: 'orb', speed: 360, radius: 9, stat: 'attack',
+      id: 'voidOrb', name: 'Void Orb', style: 'orb', speed: 223, radius: 9, stat: 'attack',
       color: '#c46bff', trail: '#5c1f8a', damageMultiplier: 1.3
     },
     shadowBolt: {
-      id: 'shadowBolt', name: 'Shadow Bolt', style: 'orb', speed: 430, radius: 8, stat: 'attack',
+      id: 'shadowBolt', name: 'Shadow Bolt', style: 'orb', speed: 267, radius: 8, stat: 'attack',
       color: '#8a5cff', trail: '#2f1d52', damageMultiplier: 1.2
     },
     rockShard: {
-      id: 'rockShard', name: 'Rock Shard', style: 'star', speed: 400, radius: 8, stat: 'attack',
+      id: 'rockShard', name: 'Rock Shard', style: 'star', speed: 248, radius: 8, stat: 'attack',
       color: '#b9b2a0', trail: '#6f6a5a', damageMultiplier: 1.15
     },
     thornVolley: {
-      id: 'thornVolley', name: 'Thorn Volley', style: 'shard', speed: 450, radius: 6, stat: 'attack',
+      id: 'thornVolley', name: 'Thorn Volley', style: 'shard', speed: 279, radius: 6, stat: 'attack',
       color: '#9be36a', trail: '#3f7a33', damageMultiplier: 1.05
     }
   };
@@ -447,7 +447,7 @@
       attackType: 'melee',
       description: 'A frontline veteran who trades finesse for staying power. Sword and shield, hold the line.',
       playstyle: 'High HP and defense with solid melee damage. The most forgiving class to learn.',
-      base: { maxHp: 140, maxMp: 20, attack: 11, defense: 7, magic: 2, speed: 165, critChance: 0.08, critMultiplier: 1.6, evasion: 0.02, attackCooldownMs: 700, attackRange: 48 },
+      base: { maxHp: 140, maxMp: 20, attack: 11, defense: 7, magic: 2, speed: 63, critChance: 0.08, critMultiplier: 1.6, evasion: 0.02, attackCooldownMs: 700, attackRange: 34 },
       growth: { maxHp: 26, maxMp: 3, attack: 2.4, defense: 1.3, magic: 0.2 },
       weaponId: 'ironLongsword',
       armorId: 'guardPlate',
@@ -467,7 +467,7 @@
       basicProjectile: 'arrow',
       description: 'A keen-eyed hunter who never lets a target close. Fast draws, faster arrows.',
       playstyle: 'Long-range bow attacks with the fastest base attack speed and high agility.',
-      base: { maxHp: 100, maxMp: 30, attack: 12, defense: 3, magic: 3, speed: 210, critChance: 0.15, critMultiplier: 1.75, evasion: 0.06, attackCooldownMs: 380, attackRange: 46, autoTargetRange: 430 },
+      base: { maxHp: 100, maxMp: 30, attack: 12, defense: 3, magic: 3, speed: 81, critChance: 0.15, critMultiplier: 1.75, evasion: 0.06, attackCooldownMs: 380, attackRange: 33, autoTargetRange: 267 },
       growth: { maxHp: 18, maxMp: 4, attack: 2.6, defense: 0.7, magic: 0.4 },
       weaponId: 'yewShortbow',
       armorId: 'rangersLeathers',
@@ -487,7 +487,7 @@
       basicProjectile: 'fireball',
       description: 'A student of the Emberwood school. Answers most problems with an explosion.',
       playstyle: 'Fire projectiles that burst for area damage, plus stacking burn effects.',
-      base: { maxHp: 88, maxMp: 60, attack: 5, defense: 2, magic: 16, speed: 175, critChance: 0.08, critMultiplier: 1.7, evasion: 0.03, attackCooldownMs: 700, attackRange: 46, autoTargetRange: 420 },
+      base: { maxHp: 88, maxMp: 60, attack: 5, defense: 2, magic: 16, speed: 67, critChance: 0.08, critMultiplier: 1.7, evasion: 0.03, attackCooldownMs: 700, attackRange: 33, autoTargetRange: 260 },
       growth: { maxHp: 15, maxMp: 9, attack: 0.8, defense: 0.5, magic: 3.4 },
       weaponId: 'emberwoodStaff',
       armorId: 'emberweaveRobe',
@@ -507,7 +507,7 @@
       basicProjectile: 'frostbolt',
       description: 'A frost scholar from the northern spires. Fights by taking the fight out of enemies.',
       playstyle: 'Chilling bolts slow and freeze, keeping dangerous foes locked in place.',
-      base: { maxHp: 92, maxMp: 62, attack: 5, defense: 2, magic: 14, speed: 175, critChance: 0.08, critMultiplier: 1.7, evasion: 0.03, attackCooldownMs: 720, attackRange: 46, autoTargetRange: 420 },
+      base: { maxHp: 92, maxMp: 62, attack: 5, defense: 2, magic: 14, speed: 67, critChance: 0.08, critMultiplier: 1.7, evasion: 0.03, attackCooldownMs: 720, attackRange: 33, autoTargetRange: 260 },
       growth: { maxHp: 16, maxMp: 9, attack: 0.8, defense: 0.5, magic: 3.0 },
       weaponId: 'frostpineStaff',
       armorId: 'frostveilRobe',
@@ -526,7 +526,7 @@
       attackType: 'melee',
       description: 'A blade for hire out of the Lantern Quarter. Precision over power, every time.',
       playstyle: 'Blistering attack speed and the highest critical chance in Mythara.',
-      base: { maxHp: 96, maxMp: 35, attack: 13, defense: 3, magic: 4, speed: 215, critChance: 0.3, critMultiplier: 2.1, evasion: 0.08, attackCooldownMs: 380, attackRange: 44 },
+      base: { maxHp: 96, maxMp: 35, attack: 13, defense: 3, magic: 4, speed: 82, critChance: 0.3, critMultiplier: 2.1, evasion: 0.08, attackCooldownMs: 380, attackRange: 27 },
       growth: { maxHp: 17, maxMp: 4, attack: 2.9, defense: 0.6, magic: 0.4 },
       weaponId: 'twinFangDaggers',
       armorId: 'shadowweaveGarb',
@@ -545,7 +545,7 @@
       attackType: 'melee',
       description: 'An oath-sworn shield of the Dawnhold. Hard to break, harder to discourage.',
       playstyle: 'The toughest class in the game, with self-healing and group-friendly support.',
-      base: { maxHp: 145, maxMp: 45, attack: 10, defense: 9, magic: 8, speed: 155, critChance: 0.07, critMultiplier: 1.6, evasion: 0.02, attackCooldownMs: 720, attackRange: 48 },
+      base: { maxHp: 145, maxMp: 45, attack: 10, defense: 9, magic: 8, speed: 60, critChance: 0.07, critMultiplier: 1.6, evasion: 0.02, attackCooldownMs: 720, attackRange: 34 },
       growth: { maxHp: 27, maxMp: 6, attack: 2.1, defense: 1.6, magic: 1.4 },
       weaponId: 'dawnbreakerSword',
       armorId: 'aegisOfDawn',
@@ -565,7 +565,7 @@
       basicProjectile: 'holyBolt',
       description: 'A keeper of the dawn rites. Mends wounds, lifts spirits, and smites when needed.',
       playstyle: 'Strong self-healing and buffs backed by holy ranged magic.',
-      base: { maxHp: 90, maxMp: 70, attack: 4, defense: 3, magic: 13, speed: 170, critChance: 0.06, critMultiplier: 1.6, evasion: 0.03, attackCooldownMs: 760, attackRange: 46, autoTargetRange: 400 },
+      base: { maxHp: 90, maxMp: 70, attack: 4, defense: 3, magic: 13, speed: 65, critChance: 0.06, critMultiplier: 1.6, evasion: 0.03, attackCooldownMs: 760, attackRange: 33, autoTargetRange: 248 },
       growth: { maxHp: 15, maxMp: 10, attack: 0.7, defense: 0.6, magic: 2.8 },
       weaponId: 'suncallStaff',
       armorId: 'vestmentsOfMercy',
@@ -584,7 +584,7 @@
       attackType: 'melee',
       description: 'A warshide raider who fights best when the odds are worst. Armour is for the cautious.',
       playstyle: 'Enormous melee damage with paper-thin defense. Rage builds as you fight, empowering you.',
-      base: { maxHp: 130, maxMp: 15, attack: 18, defense: 2, magic: 2, speed: 175, critChance: 0.12, critMultiplier: 1.85, evasion: 0.03, attackCooldownMs: 780, attackRange: 52 },
+      base: { maxHp: 130, maxMp: 15, attack: 18, defense: 2, magic: 2, speed: 67, critChance: 0.12, critMultiplier: 1.85, evasion: 0.03, attackCooldownMs: 780, attackRange: 37 },
       growth: { maxHp: 24, maxMp: 2, attack: 3.4, defense: 0.4, magic: 0.2 },
       weaponId: 'bloodhowlGreataxe',
       armorId: 'warshideHarness',
@@ -603,7 +603,7 @@
       attackType: 'melee',
       description: 'A shadow-walker from the eastern isles. Arrives unseen, leaves before the body falls.',
       playstyle: 'The fastest mover in Mythara with strong evasion and a stealth escape.',
-      base: { maxHp: 98, maxMp: 40, attack: 12, defense: 3, magic: 5, speed: 245, critChance: 0.18, critMultiplier: 1.9, evasion: 0.15, attackCooldownMs: 400, attackRange: 46 },
+      base: { maxHp: 98, maxMp: 40, attack: 12, defense: 3, magic: 5, speed: 94, critChance: 0.18, critMultiplier: 1.9, evasion: 0.15, attackCooldownMs: 400, attackRange: 33 },
       growth: { maxHp: 18, maxMp: 5, attack: 2.6, defense: 0.6, magic: 0.6 },
       weaponId: 'kageTwinBlades',
       armorId: 'shinobiWraps',
@@ -622,7 +622,7 @@
       attackType: 'melee',
       description: 'A knight of the Wyrmguard, bound to a dragon bloodline older than any kingdom.',
       playstyle: 'Heavy armour, powerful strikes and the most destructive ultimate in the game.',
-      base: { maxHp: 135, maxMp: 40, attack: 14, defense: 6, magic: 7, speed: 170, critChance: 0.1, critMultiplier: 1.75, evasion: 0.03, attackCooldownMs: 720, attackRange: 50 },
+      base: { maxHp: 135, maxMp: 40, attack: 14, defense: 6, magic: 7, speed: 65, critChance: 0.1, critMultiplier: 1.75, evasion: 0.03, attackCooldownMs: 720, attackRange: 36 },
       growth: { maxHp: 25, maxMp: 5, attack: 2.8, defense: 1.2, magic: 1.2 },
       weaponId: 'wyrmfangGreatsword',
       armorId: 'dragonplate',
@@ -646,10 +646,10 @@
       maxHp: 45,
       attack: 6,
       defense: 1,
-      speed: 62,
-      radius: 17,
-      aggroRange: 210,
-      attackRange: 12,
+      speed: 40,
+      radius: 10,
+      aggroRange: 140,
+      attackRange: 10,
       attackCooldownMs: 1200,
       wanderRadius: 96,
       respawnMs: 4000,

@@ -94,6 +94,24 @@ Current baseline in the hub village: ≈21 ms median / p75 24 ms; chapter-1 batt
 chapter-8 boss ≈24 ms (960×540, high quality, `--frames=60`). The p90/max figures include V8 GC pauses; the
 section breakdown excludes them.
 
+## scale-check.js — world & character proportions
+
+`node tools/scale-check.js` boots the game headlessly, hides the name plates, and measures the
+hero, four monster archetypes and ten village/world props straight from rendered frames (a
+two-frame diff of the live subject against the same scene with the subject hidden, so background
+props cancel out). Sizes are averaged over the hub and four chapters, then reported as
+hero-heights against a target band. Exit code is non-zero when a band fails.
+
+```bash
+node tools/scale-check.js                 # table of 14 proportions
+node tools/scale-check.js --json          # machine-readable
+node tools/scale-check.js --shot=/tmp/d   # write the diff masks it measures from
+```
+
+Current build: **14/14 in band** — hero 22 u, house 2.0 hero-heights, conifer 2.8, broadleaf 2.6,
+market stall 0.76, fence 0.39, lantern 0.75, well 1.04, NPC 0.94, road 2.7, goblin 0.68,
+wolf 0.69, elite 0.95, boss 1.74.
+
 ## Notes
 
 - `tools/lib/inline.js` — inlines `index.html` for jsdom.

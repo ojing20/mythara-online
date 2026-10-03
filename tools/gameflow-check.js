@@ -61,15 +61,22 @@ process.argv.slice(2).forEach((a) => {
   const target = h.nearestMonster();
   const hpBefore = target ? target.hp : 0;
   if (target) {
-    h.approach(target, { frames: 180, range: 40 });
-    for (let i = 0; i < 60 && target.hp >= hpBefore; i++) { h.attack(); h.key('Space', false); h.pump(3); }
+    // A short nudge toward the monster (the playfield edge blocks longer walks),
+    // then attack patiently while the monster closes to melee range.
+    h.approach(target, { frames: 60, range: 90 });
+    for (let i = 0; i < 200 && target.hp >= hpBefore && target.alive; i++) {
+      h.attack(); h.key('Space', false); h.pump(3);
+    }
   }
   check('attack damages a monster', !!target && target.hp < hpBefore, target ? hpBefore + ' → ' + target.hp : 'no target');
 
   // 4. skill cast from the hotbar button
   const skillButton = h.doc.querySelector('[data-skill-slot="0"]');
   const mpBefore = h.Game.state.player.mp;
-  if (skillButton) { skillButton.click(); h.pump(4); }
+  if (skillButton) {
+    skillButton.click();
+    for (let i = 0; i < 60 && h.Game.state.player.mp >= mpBefore; i++) { h.pump(4); }
+  }
   check('skill hotbar casts', !!skillButton && (h.Game.state.player.mp < mpBefore),
     'mp ' + mpBefore.toFixed(1) + ' → ' + h.Game.state.player.mp.toFixed(1));
 

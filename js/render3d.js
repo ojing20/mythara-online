@@ -31,8 +31,8 @@
 
   const DAY_SECONDS = 300;                      // one full cycle when the region animates time
   const QUALITY_PRESETS = {
-    high: { level: 3, renderScale: 1, propDist: 1450, terrainDist: 1500, detailDist: 330, maxActors: 40, weatherScale: 1 },
-    medium: { level: 2, renderScale: 0.85, propDist: 1050, terrainDist: 1100, detailDist: 240, maxActors: 30, weatherScale: 0.7 },
+    high: { level: 3, renderScale: 1, propDist: 1150, terrainDist: 1250, detailDist: 320, maxActors: 40, weatherScale: 1 },
+    medium: { level: 2, renderScale: 0.85, propDist: 900, terrainDist: 950, detailDist: 230, maxActors: 30, weatherScale: 0.7 },
     low: { level: 1, renderScale: 0.68, propDist: 760, terrainDist: 820, detailDist: 170, maxActors: 22, weatherScale: 0.45 }
   };
 
@@ -91,11 +91,11 @@
       state.ctx = context2d;
       state.quality = opts.quality;
       state.camera = M.createCamera({
-        x: 480, z: 430, yaw: 0, pitch: 0.32, dist: 150, fov: 46,
+        x: 480, z: 430, yaw: 0, pitch: 0.25, dist: 150, fov: 46,
         bounds: { minX: 0, maxX: 960, minZ: 0, maxZ: 540 }
       });
-      state.camera.state.minDist = 95;
-      state.camera.state.maxDist = 520;
+      state.camera.state.minDist = 80;
+      state.camera.state.maxDist = 400;
       state.camera.snap();
       state.ready = true;
       VFX.install();
@@ -320,7 +320,7 @@
           facing: player.facing,
           target: state.lockTarget,
           keepYaw: state.manualZoom,
-          lift: 22,
+          lift: 16,
           groundY: groundY
         });
       } else {

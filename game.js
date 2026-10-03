@@ -872,7 +872,7 @@
       attack: attack,
       defense: defense,
       speed: base.speed || 70,
-      radius: Math.round((def.size || 1) * 17),
+      radius: Math.round((def.size || 1) * 10.5),
       scale: def.size || 1,
       xp: Math.round((base.xp || 10) * (1 + 0.5 * steps)),
       coins: Math.round((base.coins || 5) * (1 + 0.45 * steps)),
@@ -900,7 +900,7 @@
       // --- AI: patrol radius, leash and a reaction delay before committing ---
       ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
       aiOffset: Utils.randInt(0, 4),
-      leash: def.leashRange || (def.boss || def.tier === 'boss' ? 620 : 340),
+      leash: def.leashRange || (def.boss || def.tier === 'boss' ? 400 : 220),
       losTimer: Utils.randRange(0, 0.4),
       patrolTarget: null,
       attackCooldown: 0,
@@ -940,7 +940,7 @@
       attackCooldownMs: Math.round((def.attackCooldownMs || 1500) * Utils.randRange(0.9, 1.12)),
       ai: { state: 'idle', timer: Utils.randRange(0.2, 1.2) },
       aiOffset: Utils.randInt(0, 4),
-      leash: def.leashRange || 340,
+      leash: def.leashRange || 220,
       losTimer: Utils.randRange(0, 0.4),
       patrolTarget: null,
       attackCooldown: 0,
@@ -4023,7 +4023,7 @@
     /* ---------- targeting ---------- */
 
     /** How far a selected target stays selected while it is alive. */
-    const TARGET_KEEP_RANGE = 1100;
+    const TARGET_KEEP_RANGE = 690;
     const TARGET_MELEE_LEASH = 60;
 
     function isValidTarget(monster) {
@@ -4284,7 +4284,7 @@
         return false;
       }
 
-      const target = currentTarget(520);
+      const target = currentTarget(330);
       const needsTarget = skill.kind === 'meleeStrike' || skill.kind === 'inflict';
       if (needsTarget && (!target || !Combat.inRange(player, target, player.attackRange + 24))) {
         Effects.addFloater(player.pos.x, player.pos.y - 64, 'No target in range', { color: '#e6e1ff', size: 12, life: 700 });
@@ -4593,7 +4593,7 @@
     }
 
     /* ---------- loot ---------- */
-    const LOOT_PICKUP_RADIUS = 52;
+    const LOOT_PICKUP_RADIUS = 34;
     const LOOT_LIFETIME = 90;          // seconds before a drop fades away
     const LOOT_MAX = 40;
 
@@ -4741,8 +4741,8 @@
      */
     function aiStride(monster, player) {
       const d = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
-      if (d < 420) return 1;
-      if (d < 900) return 2;
+      if (d < 300) return 1;
+      if (d < 640) return 2;
       return 5;
     }
 
@@ -4814,8 +4814,8 @@
       const hidden = Skills.isStealthed(player);
       const distanceToPlayer = Utils.distance(monster.pos.x, monster.pos.y, player.pos.x, player.pos.y);
       const homeDistance = Utils.distance(monster.pos.x, monster.pos.y, monster.home.x, monster.home.y);
-      const aggroRange = monster.isBoss ? 900 : effectiveAggroRange(monster);
-      const leash = monster.leash || 340;
+      const aggroRange = monster.isBoss ? 560 : effectiveAggroRange(monster);
+      const leash = monster.leash || 220;
       const reach = monster.radius + player.radius + (monster.def.attackRange || 14);
       const ai = monster.ai || (monster.ai = { state: 'idle', timer: 0.6 });
 
@@ -4849,7 +4849,7 @@
               ai.state = 'patrol';
               ai.timer = Utils.randRange(1.6, 3.4);
               const angle = Utils.randRange(0, Math.PI * 2);
-              const radius = Utils.randRange(18, Math.max(24, monster.def.wanderRadius || 70));
+              const radius = Utils.randRange(12, Math.max(16, (monster.def.wanderRadius || 70) * 0.7));
               monster.patrolTarget = { x: monster.home.x + Math.cos(angle) * radius, y: monster.home.y + Math.sin(angle) * radius * 0.7 };
             }
           }
@@ -4929,8 +4929,8 @@
 
     /** Bosses keep hunting; normal enemies use their data range plus alert radius. */
     function effectiveAggroRange(monster) {
-      const base = (monster.def && monster.def.aggroRange) || 240;
-      return base + (monster.aggro ? 260 : 0);
+      const base = (monster.def && monster.def.aggroRange) || 150;
+      return base + (monster.aggro ? 160 : 0);
     }
 
     /* ---------------- enemy abilities ---------------- */

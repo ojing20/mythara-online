@@ -269,6 +269,7 @@ phones. `?time=0..1` pins the time of day.
 | Water | A flat water plane with a gentle swell and shoreline foam where cells are barely submerged, so banks rise out of the water instead of water stacking into terraces |
 | Artefact fixes | Terrain culling now keeps heavily foreshortened near cells (no more sky showing through under the camera), the road is fine-segmented so it hugs hills, and the plaza/market/blacksmith/NPC set is limited to the hometown chapter |
 | Performance | Density LOD thins distant scenery deterministically, closed shapes back-face cull, small furniture is near-only, and the Low/Medium/High presets scale prop distance, detail distance, render scale and weather density |
+| World scale | Every prop, building and character is sized against the 22-unit hero; larger props read from closer, so the high preset draws props to 1150 and thins the far field harder (the far half of the ring keeps ~20% of trees on high, ~7% on low) |
 
 Representative CPU frame times (software rasteriser, 960×540, no GPU): **≈21 ms median** in the hub
 village, **≈23 ms median** in a chapter-1 battle and **≈24 ms** on the chapter-8 boss (p75 ≈ 25 ms
@@ -342,6 +343,14 @@ item into the inventory via `Account.rollItem`.
 public API), and after 3 seconds they stand up at the nearest safe ground — the Silverstone gate
 when the fight happened near the hometown, otherwise the class spawn — with full HP and MP and a
 clean bill of health. Stage and arena battles keep using the existing `battle:playerDown` flow.
+
+**World scale (v0.7).** The third-person world is sized against a 22-unit hero (about 1.75 m):
+homes are 40x30x28 with a walk-in doorway, market stalls stand 17 units to the awning, conifers
+reach 60 and giant trees 122, the road is 60 wide (~3 characters abreast) and the plaza 104
+across, with barrels, crates, benches, signposts, fences, lanterns and NPCs to match. Monsters
+are 0.5-1.7 hero-heights (goblins and wolves waist-high, elites chest-high, bosses ~1.7x), so the
+environment reads larger than the characters. `tools/scale-check.js` measures all fourteen
+proportions from rendered frames and fails the build when one leaves its band.
 
 **Performance.** Monsters further than 420 units from the hero think every other frame, beyond
 900 units every fifth frame (scaled dt keeps their motion smooth). Cooldowns are decremented, not
@@ -460,7 +469,8 @@ node --test                   # 13 server checks (register, login, conflicts, re
 
 Presentation work is verified with the `tools/` render harnesses, which boot the real game
 headlessly and write PNG frames (`render-check.js` for one scene, `render-suite.js` for the 10
-chapters / 10 bosses / 10 hero previews, `render-perf.js` for frame cost).
+chapters / 10 bosses / 10 hero previews, `render-perf.js` for frame cost, `scale-check.js` for the
+                fourteen world-scale proportions).
 
 
 | Suite | Checks | Covers |
