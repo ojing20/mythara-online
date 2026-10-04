@@ -39,6 +39,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {boolean} [o.wedgeDebug] highlight pale terrain quads (dev artifact hunt)
  * @param {number}  [o.width]   canvas width in CSS pixels (default 960)
  * @param {number}  [o.height]  canvas height in CSS pixels (default 540)
+ * @param {string}  [o.html]    boot this HTML file instead of the inlined
+ *                              sources — used to verify the single-file build
  */
 async function createHarness(o) {
   const opts = Object.assign({ quality: 'high', width: 960, height: 540 }, o || {});
@@ -82,7 +84,8 @@ async function createHarness(o) {
     ctxProto.__mytharaPatched = true;
   }
 
-  const dom = new JSDOM(buildInlineHtml(), {
+  const page = opts.html ? fs.readFileSync(opts.html, 'utf8') : buildInlineHtml();
+  const dom = new JSDOM(page, {
     url: url,
     runScripts: 'dangerously',
     pretendToBeVisual: false,
@@ -367,7 +370,7 @@ async function createHarness(o) {
     dom, win, doc, errors, consoleErrors, store, canvasMap,
     App, Game, Account, Render3D, Enemies,
     wait, pump, step, resize, sizeCanvas, dismissModal, key, attack, move,
-    signIn, createHero, unlockThrough, enterScene, setTime, setQuality,
+    signIn, createHero, unlockThrough, enterScene, setTime, setQuality, page,
     nearestMonster, approach,
     shot, shotElement, stats, profile, resetProfile, summary,
     close() { try { dom.window.close(); } catch (e) { /* jsdom already gone */ } }

@@ -1081,6 +1081,10 @@
       canvas.width = WORLD.width;
       canvas.height = WORLD.height;
       const c = canvas.getContext('2d');
+      // A browser that refuses a 2D context (canvas disabled, locked-down
+      // iframe) must not take the whole game down at boot: skip the cached
+      // backdrop and let the live sky/terrain draw instead.
+      if (!c) return null;
       const p = ZONE.palette;
       const rand = Utils.seededRandom(20261001);
       const W = WORLD.width;

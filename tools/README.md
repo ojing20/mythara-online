@@ -120,3 +120,16 @@ wolf 0.69, elite 0.95, boss 1.74.
 - Attacks are driven through the real input path (a `Space` keydown/keyup on `document`), the same
   way a player plays — `Game.playerAttack()` is not a supported entry point from outside the loop.
 - `tools/shots/` output is disposable; keep it out of commits.
+
+## build-standalone.js — the offline single-file build
+
+`node tools/build-standalone.js` inlines every stylesheet and script into
+`mythara-standalone.html` in the repository root (~880 KB). Double-click that file and the game
+runs with no server, no network and no CDN — useful when a preview host is unavailable.
+
+## standalone-check.js — does the single-file build run?
+
+`node tools/standalone-check.js` boots the generated file with the same jsdom + Skia canvas rig
+the other suites use and asserts it reaches the hub: no external `<script src>`, no external
+stylesheet links, the game/3D/world/account namespaces booted, the auth screen on screen, a hero
+created, the hub scene started and **zero boot errors**. Currently 11/11.
