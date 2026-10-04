@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0d0b1a" />
+  <meta name="description" content="Mythara Online — a browser fantasy MMORPG. Choose from 10 classes and adventure." />
+  <title>Mythara Online</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style-mmorph.css" />
+</head>
+<body class="theme-verdant">
+
+
+  <!-- ============================================================
+       SCREEN 0 — LOADING (app flow: shown first, before login)
+       ============================================================ -->
+  <section class="screen screen--loading" id="screen-loading" aria-label="Loading">
+    <div class="loading-bg" aria-hidden="true">
+      <canvas class="loading-bg__art" id="loading-art" width="1280" height="720"></canvas>
+      <span class="loading-orb loading-orb--a"></span>
+      <span class="loading-orb loading-orb--b"></span>
+      <span class="loading-orb loading-orb--c"></span>
+      <span class="loading-runes"></span>
+      <span class="loading-veil"></span>
+    </div>
+
+    <div class="loading-panel">
+      <div class="loading-logo">
+        <span class="loading-logo__wing loading-logo__wing--left" aria-hidden="true"></span>
+        <h1 class="game-title game-title--loading">Mythara <span class="game-title__accent">Online</span></h1>
+        <span class="loading-logo__wing loading-logo__wing--right" aria-hidden="true"></span>
+      </div>
+      <p class="loading-sub">A fantasy MMORPG of ten heroes and fifty trials</p>
+
+      <div class="loading-wheel" aria-hidden="true">
+        <span class="loading-wheel__ring loading-wheel__ring--outer"></span>
+        <span class="loading-wheel__ring loading-wheel__ring--inner"></span>
+        <span class="loading-wheel__rune">&#10022;</span>
+        <span class="loading-percent" id="loading-percent">0%</span>
+      </div>
+
+      <div class="loading-bar" role="progressbar" aria-label="Loading progress" aria-valuemin="0" aria-valuemax="100">
+        <div class="loading-bar__fill" id="loading-fill"></div>
+      </div>
+      <p class="loading-text" id="loading-text">Loading Mythara Online&hellip;</p>
+      <p class="loading-tip" id="loading-tip">Tip: every class can clear the story &mdash; pick the one you enjoy.</p>
+      <p class="loading-version" id="loading-version">v0.5.0-3d</p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       APP SHELL — login, menu, chapters, arena, inventory, ...
+       Built by js/ui.js when the app flow is active.
+       ============================================================ -->
+  <div class="app-root" id="app-root" hidden aria-live="polite"></div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ============================================================
+       SCREEN 1 — CHARACTER SELECTION
+       ============================================================ -->
+  <section class="screen screen--select" id="screen-select" aria-label="Character selection">
+    <div class="select-veil" aria-hidden="true"></div>
+
+    <header class="select-header">
+      <h1 class="game-title game-title--select">Mythara <span class="game-title__accent">Online</span></h1>
+      <p class="select-subtitle">Choose your class</p>
+    </header>
+
+    <div class="select-layout">
+      <!-- 10 class cards are generated from data.js by game.js -->
+      <div class="class-grid" id="class-grid" role="listbox" aria-label="Playable classes"></div>
+
+      <!-- Larger preview + details -->
+      <aside class="preview" id="preview" aria-label="Selected class details">
+        <div class="preview__backdrop" id="preview-backdrop" hidden></div>
+
+        <div class="preview__panel">
+          <button class="preview__collapse" id="preview-collapse" type="button" aria-label="Hide details">&#9660;</button>
+
+          <div class="preview__art">
+            <canvas id="preview-canvas" width="300" height="360" aria-label="Class preview"></canvas>
+            <div class="preview__glow" id="preview-glow" aria-hidden="true"></div>
+          </div>
+
+          <div class="preview__info">
+            <div class="preview__head">
+              <h2 class="preview__name" id="preview-name">Warrior</h2>
+              <span class="preview__role" id="preview-role">Melee &middot; Tank</span>
+            </div>
+
+            <p class="preview__desc" id="preview-desc"></p>
+
+            <ul class="stat-list" id="preview-stats"></ul>
+
+            <div class="loadout-grid">
+              <div class="loadout">
+                <h3>Starting Weapon</h3>
+                <p class="loadout__name" id="preview-weapon">Iron Longsword</p>
+                <p class="loadout__bonus" id="preview-weapon-bonus"></p>
+              </div>
+              <div class="loadout">
+                <h3>Starting Armor</h3>
+                <p class="loadout__name" id="preview-armor">Guard Plate</p>
+                <p class="loadout__bonus" id="preview-armor-bonus"></p>
+              </div>
+            </div>
+
+            <div class="skills-block">
+              <h3>Starting Skills</h3>
+              <ul class="skill-list" id="preview-skills"></ul>
+            </div>
+
+            <div class="preview__difficulty">
+              <span>Difficulty</span>
+              <span class="pips" id="preview-difficulty"></span>
+            </div>
+          </div>
+
+          <div class="select-actions">
+            <label class="name-field" for="char-name">
+              <span>Character name</span>
+              <input id="char-name" type="text" value="Jingle" maxlength="14" autocomplete="off"
+                     spellcheck="false" aria-label="Character name" />
+            </label>
+            <button class="btn btn--create" id="create-character" type="button">Create Character</button>
+            <button class="btn btn--ghost" id="back-button" type="button">Back</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       SCREEN 2 — THE GAME
+       ============================================================ -->
+  <div class="screen screen--game is-hidden" id="screen-game">
+    <div class="game-shell">
+
+      <!-- ================= HEADER ================= -->
+      <header class="game-header">
+        <h1 class="game-title">Mythara <span class="game-title__accent">Online</span></h1>
+        <p class="game-zone" id="zone-name">Verdant Hollow — Training Grounds</p>
+      </header>
+
+      <!-- ================= CHARACTER HUD ================= -->
+      <section class="hud" aria-label="Character status">
+
+        <div class="hud__identity">
+          <div class="hud__portrait" id="player-portrait" aria-hidden="true"><span id="player-emblem">&#9876;</span></div>
+          <div class="hud__names">
+            <span class="hud__name" id="player-name">Jingle</span>
+            <span class="hud__level" id="player-level">Lv. 1 Warrior</span>
+          </div>
+        </div>
+
+        <div class="hud__bars">
+          <div class="bar bar--hp">
+            <span class="bar__label">HP</span>
+            <div class="bar__track" role="progressbar" aria-label="Hit points"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" id="hp-bar">
+              <div class="bar__fill" id="hp-fill"></div>
+            </div>
+            <span class="bar__value" id="hp-value">100 / 100</span>
+          </div>
+
+          <div class="bar bar--mp">
+            <span class="bar__label">MP</span>
+            <div class="bar__track" role="progressbar" aria-label="Mana points"
+                 aria-valuemin="0" aria-valuemax="30" aria-valuenow="30" id="mp-bar">
+              <div class="bar__fill" id="mp-fill"></div>
+            </div>
+            <span class="bar__value" id="mp-value">30 / 30</span>
+          </div>
+
+          <div class="bar bar--exp">
+            <span class="bar__label">EXP</span>
+            <div class="bar__track" role="progressbar" aria-label="Experience"
+                 aria-valuemin="0" aria-valuemax="50" aria-valuenow="0" id="exp-bar">
+              <div class="bar__fill" id="exp-fill"></div>
+            </div>
+            <span class="bar__value" id="exp-value">0 / 50</span>
+          </div>
+
+          <div class="bar bar--rage" id="rage-row" hidden>
+            <span class="bar__label">RAGE</span>
+            <div class="bar__track" role="progressbar" aria-label="Rage"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="rage-bar">
+              <div class="bar__fill" id="rage-fill"></div>
+            </div>
+            <span class="bar__value" id="rage-value">0 / 100</span>
+          </div>
+        </div>
+
+        <div class="hud__right">
+          <div class="hud__wallet">
+            <div class="hud__coin" title="Gold">
+              <span class="hud__coin-icon hud__coin-icon--gold" aria-hidden="true">&#9670;</span>
+              <span class="hud__coin-value" id="gold-value">0</span>
+              <span class="hud__coin-label">gold</span>
+            </div>
+            <div class="hud__coin" title="Gems (premium)">
+              <span class="hud__coin-icon hud__coin-icon--gem" aria-hidden="true">&#9672;</span>
+              <span class="hud__coin-value" id="gems-value">0</span>
+              <span class="hud__coin-label">gems</span>
+            </div>
+            <div class="hud__coin" title="Healing potions">
+              <span class="hud__coin-icon hud__coin-icon--potion" aria-hidden="true">&#9878;</span>
+              <span class="hud__coin-value" id="hud-potions">0</span>
+              <span class="hud__coin-label">potions</span>
+            </div>
+          </div>
+          <div class="hud__gear" id="player-gear">Iron Longsword &middot; Guard Plate</div>
+        </div>
+      </section>
+
+      <!-- ================= STAGE ================= -->
+      <main class="stage" id="stage">
+        <canvas id="game-canvas" width="960" height="540" tabindex="-1" aria-label="Mythara Online game world"></canvas>
+
+        <div class="stage__target" id="target-plate" hidden>
+          <div class="target__head">
+            <span class="target__name" id="target-name">Green Slime</span>
+            <span class="target__level" id="target-level">Lv. 1</span>
+          </div>
+          <div class="bar bar--enemy">
+            <div class="bar__track">
+              <div class="bar__fill" id="target-hp-fill"></div>
+            </div>
+            <span class="bar__value" id="target-hp-value">0 / 0</span>
+          </div>
+          <ul class="status-chips" id="target-status"></ul>
+        </div>
+
+        <aside class="minimap" id="minimap" aria-label="Region map">
+          <div class="minimap__frame">
+            <canvas id="minimap-canvas" width="164" height="164" aria-label="Minimap"></canvas>
+            <span class="minimap__north" aria-hidden="true">N</span>
+          </div>
+          <p class="minimap__zone" id="minimap-zone">Verdant Hollow</p>
+        </aside>
+
+        <aside class="quest-tracker" id="quest-tracker" aria-label="Quest tracker">
+          <header class="quest-tracker__head">
+            <span class="quest-tracker__title">Quests</span>
+            <span class="quest-tracker__objective" id="hud-objective"></span>
+          </header>
+          <div class="quest-tracker__body" id="quest-tracker-body"></div>
+        </aside>
+
+        <div class="stage__banner" id="banner" hidden aria-live="polite"></div>
+
+        <!-- Touch / mobile controls -->
+        <div class="touch-controls" id="touch-controls">
+          <div class="dpad" role="group" aria-label="Movement controls">
+            <button class="dpad__btn dpad__btn--up"    data-dir="up"    aria-label="Move up">&#9650;</button>
+            <button class="dpad__btn dpad__btn--left"  data-dir="left"  aria-label="Move left">&#9664;</button>
+            <button class="dpad__btn dpad__btn--right" data-dir="right" aria-label="Move right">&#9654;</button>
+            <button class="dpad__btn dpad__btn--down"  data-dir="down"  aria-label="Move down">&#9660;</button>
+          </div>
+          <button class="touch-attack" id="touch-attack" aria-label="Attack">Attack</button>
+        </div>
+      </main>
+
+      <!-- ================= FOOTER: LOG + ACTIONS ================= -->
+      <footer class="game-footer">
+        <section class="chat-frame" aria-label="Combat log">
+          <header class="chat-frame__head">
+            <span class="chat-frame__tab chat-frame__tab--active">Combat</span>
+            <span class="chat-frame__tab">System</span>
+          </header>
+          <ul class="combat-log" id="combat-log" aria-live="polite" aria-label="Combat log"></ul>
+        </section>
+
+        <div class="actions">
+          <div class="skill-bar" id="skill-bar" aria-label="Skills"></div>
+
+          <div class="action-row">
+            <button class="btn btn--attack" id="attack-button" type="button">
+              <span class="btn__icon" aria-hidden="true">&#9876;</span> Attack
+            </button>
+            <button class="btn btn--ghost" id="change-class" type="button">Change Character</button>
+            <button class="btn btn--ghost" id="touch-toggle" type="button" aria-pressed="false">
+              Touch controls
+            </button>
+          </div>
+
+          <p class="hint">
+            Move: <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+            &middot; Attack: <kbd>Space</kbd> &middot; Skills: <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>
+          </p>
+        </div>
+      </footer>
+
+    </div>
+  </div>
+
+  <script src="js/core.js"></script>
+  <script src="js/sfx.js"></script>
+  <script src="data.js"></script>
+  <script src="js/data-items.js"></script>
+  <script src="js/data-enemies.js"></script>
+  <script src="js/data-loot.js"></script>
+  <script src="js/data-stages.js"></script>
+  <script src="game.js"></script>
+  <script src="js/account.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/systems.js"></script>
+  <script src="js/battle.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+
+  <!-- ============================================================
+       MMORPG presentation layer — original software-3D renderer:
+       sky, terrain, props, weather, day/night, character & creature
+       rigs, combat VFX, minimap and the class preview.
+       Loaded last: it decorates the engine, never replaces it.
+       ============================================================ -->
+  <script src="js/render3d-core.js"></script>
+  <script src="js/render3d-shapes.js"></script>
+  <script src="js/render3d-world.js"></script>
+  <script src="js/render3d-actors.js"></script>
+  <script src="js/render3d-vfx.js"></script>
+  <script src="js/render3d.js"></script>
+</body>
+</html>
