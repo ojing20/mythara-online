@@ -469,14 +469,20 @@
         });
         // plaza-edge furniture: benches, crates and barrels (the brief's detail pass)
         for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * TAU + 0.35;
-          const x = V.x + Math.cos(a) * 34, z = V.z + Math.sin(a) * 28;
+          const a = (i / 8) * TAU + 0.39;
+          const x = V.x + Math.cos(a) * 42, z = V.z + Math.sin(a) * 34;
           list.push({ type: 'bench', x: x, z: z, y: heightAt(x, z), s: 1, rot: a + Math.PI / 2, v: rand(i, 31), i: i + 60 });
         }
-        for (let i = 0; i < 14; i++) {
+        // Barrels, crates and spare benches dress the plaza edges. They keep
+        // clear of the four approach lanes and of the fountain, so the square
+        // stays walkable from any direction.
+        for (let i = 0; i < 16; i++) {
           const a = rand(i, 32) * TAU;
-          const r = 24 + rand(i, 33) * 46;
+          const r = 62 + rand(i, 33) * 46;
           const x = V.x + Math.cos(a) * r * 1.6, z = V.z + Math.sin(a) * r;
+          const laneX = Math.abs(x - V.x) < 30 && Math.abs(z - V.z) < 120;
+          const laneZ = Math.abs(z - V.z) < 30 && Math.abs(x - V.x) < 120;
+          if (laneX || laneZ) continue;
           list.push({
             type: i % 3 === 2 ? 'bench' : i % 2 ? 'crate' : 'barrel',
             x: x, z: z, y: heightAt(x, z), s: 0.9 + rand(i, 34) * 0.4,
@@ -557,9 +563,12 @@
    * feel — the combat rules and the play area are unchanged.
    * ========================================================== */
   const BLOCKER_RADIUS = {
-    house: 12, ruin: 10, well: 4.5, blacksmith: 11, market: 6.5,
+    // Sized against the v0.7 props: a 40x30 home blocks a 17-unit circle, a
+    // 26x18 stall 9.5, the well 7 — so walls are actually solid.
+    house: 17, ruin: 10, well: 7, blacksmith: 12, market: 9.5,
     tower: 9, watchtower: 10, fortress: 30, spire: 14, obeliskBig: 9,
-    pillar: 4, rock: 3.4, rockBig: 8, tree: 1.9, crystal: 3
+    pillar: 4, rock: 4.5, rockBig: 11, tree: 3.2, crystal: 3,
+    barrel: 2.6, crate: 3, bench: 3.4
   };
   const MAX_SLOPE = 0.5;              // walkable gradient; the playfield sits at 0.05
 

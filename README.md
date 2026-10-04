@@ -352,6 +352,14 @@ are 0.5-1.7 hero-heights (goblins and wolves waist-high, elites chest-high, boss
 environment reads larger than the characters. `tools/scale-check.js` measures all fourteen
 proportions from rendered frames and fails the build when one leaves its band.
 
+**Movement (v0.7.1).** The hero walks the whole starting area: the walkable band reaches from the
+battlefield north into Silverstone, so the plaza, market row, blacksmith, well and all three NPCs
+can be visited. Houses, stalls, the well, the blacksmith and the village furniture are solid — the
+blocker radii follow the v0.7 prop sizes — while the plaza keeps four clear approach lanes. Body
+sizes are scaled for the new character proportions, but every *distance* rule (traversal speed,
+aggro, leash, targeting, AI LOD) keeps its original world-scale value, because the playfield itself
+never shrank. `tools/movement-check.js` covers all of it (13 checks).
+
 **Performance.** Monsters further than 420 units from the hero think every other frame, beyond
 900 units every fifth frame (scaled dt keeps their motion smooth). Cooldowns are decremented, not
 recomputed; line-of-sight checks are throttled to ~3/second per monster; loot rendering only

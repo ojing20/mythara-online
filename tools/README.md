@@ -133,3 +133,27 @@ runs with no server, no network and no CDN — useful when a preview host is una
 the other suites use and asserts it reaches the hub: no external `<script src>`, no external
 stylesheet links, the game/3D/world/account namespaces booted, the auth screen on screen, a hero
 created, the hub scene started and **zero boot errors**. Currently 11/11.
+
+## movement-check.js — how the hero moves
+
+`node tools/movement-check.js` boots the hub and checks movement the way a player experiences it:
+all four keyboard directions, traversal pace, the on-screen D-pad (real `pointerdown`/`pointerup`),
+the walk from the battlefield north into Silverstone, solid buildings, the walkable bounds and
+free-roam knock-down/revive. Currently **13/13**.
+
+```bash
+node tools/movement-check.js          # 13 checks
+node tools/movement-check.js --json
+```
+
+Tuning that keeps it passing (v0.7.1):
+
+| Knob | Where | Why |
+| --- | --- | --- |
+| `CONFIG.world.floorTop` (150) | `data.js` | north edge of the walkable band — the plaza, market row, blacksmith, well and NPCs sit between z=180 and z=320, so the hero can walk up into the village |
+| `BLOCKER_RADIUS` | `js/render3d-world.js` | circle radii of solid props; a 40x30 home blocks 17 units, a 26x18 stall 9.5, barrels/crates/benches 2.6-3.4 |
+| class `speed` (96-152) | `data.js` | world units per second. The playfield never shrank, so these are the original pre-rescale values |
+| plaza furniture lanes | `js/render3d-world.js` | barrels/crates/benches keep clear of the four approach lanes so the square is walkable from any side |
+
+Keyboard input needs the frame to have focus: clicking the world focuses the canvas
+(`focusGame()`), and a one-time toast nudges first-time players in embedded previews.
